@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kala-Mitra WebSocket Test Console</title>
+  
+  <!-- Inter Font from Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+      --panel-bg: rgba(30, 41, 59, 0.45);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-purple: #c084fc;
+      --accent-teal: #2dd4bf;
+      --status-connecting: #fbbf24;
+      --status-connected: #34d399;
+      --status-disconnected: #f87171;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.5rem;
+      overflow-x: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1000px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    /* Premium Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1.5rem 2rem;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(to right, var(--accent-purple), var(--accent-teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.025em;
+    }
+
+    .status-container {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: var(--status-disconnected);
+      box-shadow: 0 0 8px var(--status-disconnected);
+      transition: all 0.3s ease;
+    }
+
+    .status-indicator.connecting {
+      background-color: var(--status-connecting);
+      box-shadow: 0 0 12px var(--status-connecting);
+      animation: pulse 1.5s infinite alternate;
+    }
+
+    .status-indicator.connected {
+      background-color: var(--status-connected);
+      box-shadow: 0 0 12px var(--status-connected);
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+
+    /* Main Console Area */
+    .console-panel {
+      display: flex;
+      flex-direction: column;
+      height: 65vh;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+    }
+
+    .console-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--panel-border);
+      background: rgba(15, 23, 42, 0.2);
+    }
+
+    .console-title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .clear-btn {
+      background: transparent;
+      border: 1px solid var(--panel-border);
+      color: var(--text-muted);
+      padding: 0.35rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .clear-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Console logs */
+    .log-area {
+      flex: 1;
+      padding: 1.5rem;
+      overflow-y: auto;
+      font-family: 'Fira Code', monospace;
+      font-size: 0.875rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      background: rgba(10, 15, 30, 0.4);
+    }
+
+    .log-entry {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 1rem;
+      border-radius: 12px;
+      border: 1px solid transparent;
+      animation: slideIn 0.25s ease-out;
+      max-width: 90%;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .log-entry.outgoing {
+      align-self: flex-end;
+      background: rgba(192, 132, 252, 0.08);
+      border-color: rgba(192, 132, 252, 0.15);
+    }
+
+    .log-entry.incoming {
+      align-self: flex-start;
+      background: rgba(45, 212, 191, 0.08);
+      border-color: rgba(45, 212, 191, 0.15);
+    }
+
+    .log-entry.system {
+      align-self: center;
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.06);
+      text-align: center;
+      max-width: 100%;
+      font-size: 0.8rem;
+    }
+
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .log-entry.outgoing .log-header {
+      color: var(--accent-purple);
+    }
+
+    .log-entry.incoming .log-header {
+      color: var(--accent-teal);
+    }
+
+    .log-body {
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+
+    /* Pretty JSON styling */
+    .json-key { color: var(--accent-purple); }
+    .json-value { color: var(--accent-teal); }
+    .json-string { color: #f472b6; }
+    .json-boolean { color: #3b82f6; }
+    .json-number { color: #f59e0b; }
+
+    /* Input Controls */
+    .input-panel {
+      display: flex;
+      gap: 0.75rem;
+      padding: 1.25rem 1.5rem;
+      background: rgba(15, 23, 42, 0.3);
+      border-top: 1px solid var(--panel-border);
+    }
+
+    .text-input {
+      flex: 1;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 0.85rem 1.25rem;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    .text-input:focus {
+      border-color: var(--accent-purple);
+      box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.15);
+    }
+
+    .text-input::placeholder {
+      color: rgba(148, 163, 184, 0.5);
+    }
+
+    .send-btn {
+      background: linear-gradient(90deg, #a855f7 0%, #7c3aed 100%);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 0 1.75rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+    }
+
+    .send-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(124, 58, 237, 0.4);
+      filter: brightness(1.1);
+    }
+
+    .send-btn:active {
+      transform: translateY(1px);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.1);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <h1>Kala-Mitra Test Console</h1>
+      <div class="status-container">
+        <div id="statusIndicator" class="status-indicator"></div>
+        <span id="statusLabel">DISCONNECTED</span>
+      </div>
+    </header>
+
+    <!-- Console Panel -->
+    <div class="console-panel">
+      <div class="console-header">
+        <span class="console-title">Live WebSocket Logs</span>
+        <button id="clearBtn" class="clear-btn">Clear Logs</button>
+      </div>
+      
+      <div id="logArea" class="log-area">
+        <div class="log-entry system">
+          <div class="log-body">Console initialized. Ready to connect to ws://localhost:8787/ws...</div>
+        </div>
+      </div>
+
+      <div class="input-panel">
+        <input 
+          type="text" 
+          id="textInput" 
+          class="text-input" 
+          placeholder="Ask Kala-Mitra something (e.g. 'Create a product called Wooden Bowl with a price of 25')..." 
+          autocomplete="off"
+        >
+        <button id="sendBtn" class="send-btn">Send Text</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const logArea = document.getElementById('logArea');
+    const textInput = document.getElementById('textInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusLabel = document.getElementById('statusLabel');
+
+    let socket = null;
+
+    // Connect to WebSocket
+    function connect() {
+      updateStatus('connecting');
+      addSystemLog('Connecting to ws://localhost:8787/ws...');
+
+      socket = new WebSocket('ws://localhost:8787/ws');
+
+      socket.onopen = () => {
+        updateStatus('connected');
+        addSystemLog('Connected to WebSocket server!');
+      };
+
+      socket.onmessage = async (event) => {
+        let rawData = '';
+        if (event.data instanceof Blob) {
+          rawData = await event.data.text();
+        } else if (typeof event.data === 'string') {
+          rawData = event.data;
+        } else {
+          rawData = event.data.toString();
+        }
+
+        try {
+          const json = JSON.parse(rawData);
+          addLog('incoming', json);
+        } catch (e) {
+          // If not valid JSON (e.g. raw audio binary chunks, status reports), display as text
+          addLog('incoming', { rawMessage: rawData });
+        }
+      };
+
+      socket.onclose = (event) => {
+        updateStatus('disconnected');
+        addSystemLog(`Connection closed. Code: ${event.code}. Reconnecting in 3s...`);
+        socket = null;
+        setTimeout(connect, 3000);
+      };
+
+      socket.onerror = (error) => {
+        addSystemLog('WebSocket Error observed.');
+        console.error('WebSocket Error:', error);
+      };
+    }
+
+    function updateStatus(status) {
+      statusIndicator.className = 'status-indicator';
+      if (status === 'connecting') {
+        statusIndicator.classList.add('connecting');
+        statusLabel.textContent = 'CONNECTING';
+        statusLabel.style.color = 'var(--status-connecting)';
+      } else if (status === 'connected') {
+        statusIndicator.classList.add('connected');
+        statusLabel.textContent = 'CONNECTED';
+        statusLabel.style.color = 'var(--status-connected)';
+      } else {
+        statusLabel.textContent = 'DISCONNECTED';
+        statusLabel.style.color = 'var(--status-disconnected)';
+      }
+    }
+
+    // Pretty-print JSON helper
+    function syntaxHighlight(json) {
+      if (typeof json !== 'string') {
+        json = JSON.stringify(json, undefined, 2);
+      }
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, function (match) {
+        let cls = 'json-value';
+        if (/^"/.test(match)) {
+          if (/:$/.test(match)) {
+            cls = 'json-key';
+            return `<span class="${cls}">${match.replace(/:$/, '')}</span>:`;
+          } else {
+            cls = 'json-string';
+          }
+        } else if (/true|false/.test(match)) {
+          cls = 'json-boolean';
+        } else if (/null/.test(match)) {
+          cls = 'json-null';
+        } else {
+          cls = 'json-number';
+        }
+        return `<span class="${cls}">${match}</span>`;
+      });
+    }
+
+    function addLog(type, payload) {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      
+      const time = new Date().toLocaleTimeString();
+      const headerText = type === 'outgoing' ? `Sent Payload (${time})` : `Received Payload (${time})`;
+      
+      entry.innerHTML = `
+        <div class="log-header">
+          <span>${headerText}</span>
+        </div>
+        <div class="log-body">${syntaxHighlight(payload)}</div>
+      `;
+      
+      logArea.appendChild(entry);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function addSystemLog(message) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry system';
+      entry.innerHTML = `<div class="log-body">${message}</div>`;
+      logArea.appendChild(entry);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function sendText() {
+      const text = textInput.value.trim();
+      if (!text) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        addSystemLog('Cannot send message: WebSocket is not connected.');
+        return;
+      }
+
+      // Standard Gemini Live text-turn format
+      const payload = {
+        clientContent: {
+          turns: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: text
+                }
+              ]
+            }
+          ],
+          turnComplete: true
+        }
+      };
+
+      socket.send(JSON.stringify(payload));
+      addLog('outgoing', payload);
+      textInput.value = '';
+    }
+
+    // Event Listeners
+    sendBtn.addEventListener('click', sendText);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendText();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      logArea.innerHTML = '';
+      addSystemLog('Logs cleared.');
+    });
+
+    // Start connection
+    connect();
+  </script>
+</body>
+</html>

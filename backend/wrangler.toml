@@ -1,0 +1,14 @@
+name = "init-hono-websocket-worker"
+main = "src/index.ts"
+compatibility_date = "2024-05-12"
+
+[dev]
+port = 8787
+ip = "127.0.0.1"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kalamitra-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+migrations_dir = "drizzle"
+
