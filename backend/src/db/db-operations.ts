@@ -389,11 +389,16 @@ export async function getStorefrontData(
 
     const artisan = artisanResult[0];
 
-    // 2. Query the products table for all items matching that artisanId
+    // 2. Query the products table for all live items matching that artisanId
     const productsResult = await drizzleDb
       .select()
       .from(schema.products)
-      .where(eq(schema.products.artisanId, artisan.id));
+      .where(
+        and(
+          eq(schema.products.artisanId, artisan.id),
+          eq(schema.products.isLive, true)
+        )
+      );
 
     return {
       success: true,
