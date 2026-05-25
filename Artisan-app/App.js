@@ -602,46 +602,6 @@ export default function App() {
     return status === 'granted';
   }, []);
 
-  // ── Push to Talk: Start ───────────────────────────────────────────────────
-  const startRecording = useCallback(async () => {
-    try {
-      // Check permission directly to avoid closure race conditions
-      const { granted } = await Audio.getPermissionsAsync();
-      if (!granted) return;
-
-      // If already recording, don't start a new one
-      if (recordingRef.current) return;
-
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync({
-        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-        isMeteringEnabled: true,
-      });
-      recording.setOnRecordingStatusUpdate((status) => {
-        console.log('raw metering:', status.metering);
-        if (status.isRecording && status.metering !== undefined) {
-          const db = status.metering;
-          const minDb = -60;
-          const maxDb = -10;
-          let val = (db - minDb) / (maxDb - minDb);
-          val = Math.max(0, Math.min(1, val));
-          volumeLevel.value = val;
-          const normalized = val * 28;
-          amplitudeRef.value = normalized;
-          console.log('normalized amp:', normalized);
-        } else {
-          amplitudeRef.value = 0;
-        }
-      });
-      await recording.startAsync();
-      await recording.setProgressUpdateInterval(80);
-      recordingRef.current = recording;
-      setIsRecording(true);
-      Animated.spring(scaleAnim, { toValue: 0.92, useNativeDriver: true }).start();
-    } catch (err) {
-      console.warn('[PTT] Failed to start recording:', err);
-    }
-  }, [scaleAnim, volumeLevel]);
 
   // ── WebSocket: Send Audio Payload ─────────────────────────────────────────
   /**
