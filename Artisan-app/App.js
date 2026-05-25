@@ -420,9 +420,169 @@ function PermissionDeniedScreen({ type, onRetry, t }) {
 
 // WaveformBars replaced by SiriWaveform (see SiriWaveform.js)
 
+// ─── Animated Splash Screen ──────────────────────────────────────────────────
+function AnimatedSplashScreen({ onFinish }) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    // 1. Fade in the whole screen
+    Animated.timing(opacityAnim, {
+      toValue: 1,
+      duration: 600,
+      useNativeDriver: true,
+    }).start();
+
+    // 2. Pulse animation for the logo
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scaleAnim, {
+          toValue: 1.05,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scaleAnim, {
+          toValue: 0.95,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    // 3. Rolling/spinning animation for the orbiting languages
+    Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 9000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    ).start();
+
+    // 4. End splash screen after 3.5 seconds
+    const timer = setTimeout(() => {
+      // Fade out screen before ending
+      Animated.timing(opacityAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }).start(() => {
+        onFinish();
+      });
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  const spin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const reverseSpin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '-360deg'],
+  });
+
+  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+  const RADIUS = 120;
+  const LANGUAGES_SPLASH = [
+    { text: 'हिन्दी', lang: 'hi' },
+    { text: 'ಕನ್ನಡ', lang: 'kn' },
+    { text: 'தமிழ்', lang: 'ta' },
+    { text: 'తెలుగు', lang: 'te' },
+    { text: 'বাংলা', lang: 'bn' },
+    { text: 'मराठी', lang: 'mr' },
+    { text: 'ગુજરાતી', lang: 'gu' },
+    { text: 'English', lang: 'en' },
+  ];
+
+  return (
+    <Animated.View style={{ flex: 1, backgroundColor: '#ffffff', opacity: opacityAnim, justifyContent: 'center', alignItems: 'center' }}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      
+      {/* Spinning Container of orbiting languages */}
+      <Animated.View style={{
+        position: 'absolute',
+        width: RADIUS * 2 + 100,
+        height: RADIUS * 2 + 100,
+        justifyContent: 'center',
+        alignItems: 'center',
+        transform: [{ rotate: spin }],
+      }}>
+        {LANGUAGES_SPLASH.map((item, index) => {
+          const angle = (index * 2 * Math.PI) / LANGUAGES_SPLASH.length;
+          const x = RADIUS * Math.cos(angle);
+          const y = RADIUS * Math.sin(angle);
+
+          return (
+            <View
+              key={item.lang}
+              style={{
+                position: 'absolute',
+                transform: [
+                  { translateX: x },
+                  { translateY: y },
+                ],
+                width: 70,
+                height: 35,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              {/* Reverse spin keeps the characters upright and readable while orbiting */}
+              <Animated.Text style={{
+                color: '#48cae4',
+                fontSize: 14,
+                fontWeight: '600',
+                opacity: 0.35,
+                transform: [{ rotate: reverseSpin }],
+              }}>
+                {item.text}
+              </Animated.Text>
+            </View>
+          );
+        })}
+      </Animated.View>
+
+      {/* Stylized centered logo container */}
+      <Animated.View style={{
+        width: 100,
+        height: 100,
+        borderRadius: 50,
+        backgroundColor: '#f0f9ff',
+        borderWidth: 0.5,
+        borderColor: '#48cae4',
+        justifyContent: 'center',
+        alignItems: 'center',
+        transform: [{ scale: scaleAnim }],
+        shadowColor: '#48cae4',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 10,
+        elevation: 4,
+      }}>
+        <Text style={{ fontSize: 24, color: '#48cae4' }}>🎙️</Text>
+        <Text style={{ fontSize: 11, fontWeight: '800', color: '#48cae4', letterSpacing: 1.5, marginTop: 2 }}>SAKHI</Text>
+      </Animated.View>
+
+      {/* Premium minimal loading status indicator at bottom */}
+      <View style={{ position: 'absolute', bottom: 60, alignItems: 'center' }}>
+        <Text style={{ color: '#48cae4', fontSize: 10, fontWeight: '700', letterSpacing: 3, opacity: 0.7 }}>
+          LOADING SAKHI
+        </Text>
+      </View>
+    </Animated.View>
+  );
+}
+
 // ─── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [appReady, setAppReady] = useState(false);
+  const [splashActive, setSplashActive] = useState(true);
   const [hasSelectedLanguage, setHasSelectedLanguage] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState('en');
 
@@ -608,8 +768,10 @@ export default function App() {
   const profileSlide = useRef(new Animated.Value(-screenWidth)).current;
   const profileContentProgress = useRef(new Animated.Value(0)).current;
   const [profileVisible, setProfileVisible] = useState(false);
+  const [profileSubmenu, setProfileSubmenu] = useState('main');
 
   const openProfile = () => {
+    setProfileSubmenu('main');
     setProfileVisible(true);
     Animated.parallel([
       Animated.spring(profileSlide, {
@@ -1022,13 +1184,12 @@ export default function App() {
   const wsBadge = wsStatusConfig[wsStatus];
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  if (splashActive) {
+    return <AnimatedSplashScreen onFinish={() => setSplashActive(false)} />;
+  }
+
   if (!appReady) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
-        <StatusBar barStyle="light-content" backgroundColor="#000000" />
-        <Text style={{ color: '#555', fontSize: 14, letterSpacing: 2 }}>{t('loading')}</Text>
-      </SafeAreaView>
-    );
+    return null;
   }
 
   if (!hasSelectedLanguage) {
@@ -1045,7 +1206,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#0A0A14" />
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <WebView
         ref={recorderWebViewRef}
         source={{ html: PCM_RECORDER_HTML, baseUrl: 'https://localhost' }}
@@ -1064,10 +1225,10 @@ export default function App() {
       <View style={styles.header}>
         {/* Hamburger Menu top-left */}
         <TouchableOpacity style={{ alignItems: 'center' }} activeOpacity={0.8} onPress={openProfile}>
-          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#1a1a1a', borderWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: '400' }}>☰</Text>
+          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#f0f9ff', borderWidth: 0.5, borderColor: '#48cae4', justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{ color: '#000000', fontSize: 20, fontWeight: '400' }}>☰</Text>
           </View>
-          <Text style={{ fontSize: 9, color: '#555', letterSpacing: 1, marginTop: 3 }}>{t('menu')}</Text>
+          <Text style={{ fontSize: 9, color: '#48cae4', letterSpacing: 1, marginTop: 3 }}>{t('menu')}</Text>
         </TouchableOpacity>
 
         {/* Right side container: Sakhi & Connection status pill */}
@@ -1083,14 +1244,14 @@ export default function App() {
             {/* WebSocket status badge */}
             <View style={styles.wsBadge}>
               <View style={[styles.wsDot, { backgroundColor: wsBadge.dot }]} />
-              <Text style={[styles.wsLabel, { color: wsBadge.color }]}>{wsBadge.label}</Text>
+              <Text style={[styles.wsLabel, { color: '#000000' }]}>{wsBadge.label}</Text>
             </View>
           </View>
         </View>
       </View>
 
       {/* ── Top Half: Camera Feed Placeholder ── */}
-      <View style={{ flex: 1, backgroundColor: '#000' }} />
+      <View style={{ flex: 1, backgroundColor: '#ffffff' }} />
 
       {/* ── Bottom Half: Push to Talk ── */}
       <View style={styles.bottomSection}>
@@ -1149,45 +1310,45 @@ export default function App() {
 
       {/* ── Persistent Skia Waveform Canvas ── */}
       <Canvas style={{ width: '100%', height: 120, position: 'absolute', bottom: 0, left: 0 }}>
-        {/* Layer 4: #444, opacity 0.15, strokeWidth 0.6 */}
+        {/* Layer 4: #48cae4, opacity 0.15, strokeWidth 0.6 */}
         <Path path={wave4Fill} style="fill">
           <LinearGradient
             start={vec(0, 0)}
             end={vec(0, 120)}
-            colors={['rgba(68, 68, 68, 0.07)', 'rgba(68, 68, 68, 0)']}
+            colors={['rgba(72, 202, 228, 0.02)', 'rgba(72, 202, 228, 0)']}
           />
         </Path>
-        <Path path={wave4Stroke} style="stroke" strokeWidth={0.6} color="#444" opacity={0.15} />
+        <Path path={wave4Stroke} style="stroke" strokeWidth={0.6} color="#48cae4" opacity={0.15} />
 
-        {/* Layer 3: #777, opacity 0.28, strokeWidth 0.8 */}
+        {/* Layer 3: #48cae4, opacity 0.3, strokeWidth 0.8 */}
         <Path path={wave3Fill} style="fill">
           <LinearGradient
             start={vec(0, 0)}
             end={vec(0, 120)}
-            colors={['rgba(119, 119, 119, 0.07)', 'rgba(119, 119, 119, 0)']}
+            colors={['rgba(72, 202, 228, 0.05)', 'rgba(72, 202, 228, 0)']}
           />
         </Path>
-        <Path path={wave3Stroke} style="stroke" strokeWidth={0.8} color="#777" opacity={0.28} />
+        <Path path={wave3Stroke} style="stroke" strokeWidth={0.8} color="#48cae4" opacity={0.3} />
 
-        {/* Layer 2: #bbb, opacity 0.5, strokeWidth 1.2 */}
+        {/* Layer 2: #48cae4, opacity 0.6, strokeWidth 1.2 */}
         <Path path={wave2Fill} style="fill">
           <LinearGradient
             start={vec(0, 0)}
             end={vec(0, 120)}
-            colors={['rgba(187, 187, 187, 0.07)', 'rgba(187, 187, 187, 0)']}
+            colors={['rgba(72, 202, 228, 0.10)', 'rgba(72, 202, 228, 0)']}
           />
         </Path>
-        <Path path={wave2Stroke} style="stroke" strokeWidth={1.2} color="#bbb" opacity={0.5} />
+        <Path path={wave2Stroke} style="stroke" strokeWidth={1.2} color="#48cae4" opacity={0.6} />
 
-        {/* Layer 1: #fff, opacity 1, strokeWidth 2 */}
+        {/* Layer 1: #48cae4, opacity 1, strokeWidth 2 */}
         <Path path={wave1Fill} style="fill">
           <LinearGradient
             start={vec(0, 0)}
             end={vec(0, 120)}
-            colors={['rgba(255, 255, 255, 0.07)', 'rgba(255, 255, 255, 0)']}
+            colors={['rgba(72, 202, 228, 0.15)', 'rgba(72, 202, 228, 0)']}
           />
         </Path>
-        <Path path={wave1Stroke} style="stroke" strokeWidth={2} color="#fff" opacity={1} />
+        <Path path={wave1Stroke} style="stroke" strokeWidth={2} color="#48cae4" opacity={1} />
       </Canvas>
 
       {/* ── Camera Floating Action Button ── */}
@@ -1216,7 +1377,7 @@ export default function App() {
         <Animated.View style={{
           position: 'absolute',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: '#000',
+          backgroundColor: '#ffffff',
           transform: [{ translateX: profileSlide }],
           zIndex: 1001,
           paddingTop: 60,
@@ -1232,10 +1393,10 @@ export default function App() {
             opacity: profileContentProgress,
           }}>
             <TouchableOpacity onPress={closeProfile}>
-              <Text style={{ color: '#fff', fontSize: 13, letterSpacing: 1 }}>{t('back')}</Text>
+              <Text style={{ color: '#000000', fontSize: 13, letterSpacing: 1 }}>{t('back')}</Text>
             </TouchableOpacity>
             <Text style={{
-              color: '#fff',
+              color: '#000000',
               fontSize: 20,
               fontWeight: '800',
               letterSpacing: 4,
@@ -1260,9 +1421,9 @@ export default function App() {
                 width: 100,
                 height: 100,
                 borderRadius: 50,
-                backgroundColor: '#111',
+                backgroundColor: '#f0f9ff',
                 borderWidth: 0.5,
-                borderColor: '#333',
+                borderColor: 'rgba(72, 202, 228, 0.3)',
                 justifyContent: 'center',
                 alignItems: 'center',
                 overflow: 'hidden',
@@ -1274,17 +1435,17 @@ export default function App() {
                   })
                 }]
               }}>
-                <Text style={{ color: '#555', fontSize: 10, letterSpacing: 1 }}>{t('photo')}</Text>
+                <Text style={{ color: '#48cae4', fontSize: 10, letterSpacing: 1 }}>{t('photo')}</Text>
               </Animated.View>
 
               {/* Name pill */}
               <Animated.View style={{
                 borderWidth: 0.5,
-                borderColor: '#333',
+                borderColor: 'rgba(72, 202, 228, 0.3)',
                 borderRadius: 10,
                 paddingVertical: 10,
                 paddingHorizontal: 30,
-                backgroundColor: '#0d0d0d',
+                backgroundColor: '#f0f9ff',
                 minWidth: 160,
                 alignItems: 'center',
                 opacity: profileContentProgress,
@@ -1296,7 +1457,7 @@ export default function App() {
                 }]
               }}>
                 <Text style={{
-                  color: '#fff',
+                  color: '#000000',
                   fontSize: 16,
                   fontWeight: '600',
                   letterSpacing: 1,
@@ -1305,76 +1466,154 @@ export default function App() {
             </View>
 
             {/* Menu List Options */}
-            <View style={{ paddingHorizontal: 8 }}>
-              {[
-                { key: 'analytics', title: t('analytics'), icon: '📊' },
-                { key: 'orders', title: t('orders'), icon: '📦' },
-                { key: 'news_updates', title: t('news_updates'), icon: '📢' },
-                { key: 'language_settings', title: t('language_settings'), icon: '🌐' },
-                { key: 'settings', title: t('settings'), icon: '⚙️' },
-              ].map((item, index) => {
-                const translateY = profileContentProgress.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [40 + index * 15, 0],
-                });
-                return (
-                  <Animated.View
-                    key={item.key}
-                    style={{
-                      opacity: profileContentProgress,
-                      transform: [{ translateY }],
-                    }}
-                  >
-                    <TouchableOpacity
+            {profileSubmenu === 'main' ? (
+              <View style={{ paddingHorizontal: 8 }}>
+                {[
+                  { key: 'analytics', title: t('analytics'), icon: '📊' },
+                  { key: 'orders', title: t('orders'), icon: '📦' },
+                  { key: 'news_updates', title: t('news_updates'), icon: '📢' },
+                  { key: 'settings', title: t('settings'), icon: '⚙️' },
+                ].map((item, index) => {
+                  const translateY = profileContentProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [40 + index * 15, 0],
+                  });
+                  return (
+                    <Animated.View
+                      key={item.key}
                       style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 16,
-                        paddingHorizontal: 20,
-                        borderBottomWidth: 0.5,
-                        borderBottomColor: '#222',
-                      }}
-                      activeOpacity={0.7}
-                      onPress={async () => {
-                        if (item.key === 'language_settings') {
-                          try {
-                            setHasSelectedLanguage(false);
-                            closeProfile();
-                          } catch (err) {
-                            console.warn('[Storage] Failed to open language settings:', err);
-                          }
-                        }
+                        opacity: profileContentProgress,
+                        transform: [{ translateY }],
                       }}
                     >
-                      <View style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 18,
-                        backgroundColor: '#111',
-                        borderWidth: 0.5,
-                        borderColor: '#333',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }}>
-                        <Text style={{ fontSize: 16 }}>{item.icon}</Text>
-                      </View>
-                      <Text style={{
-                        color: '#fff',
-                        fontSize: 15,
-                        fontWeight: '500',
-                        marginLeft: 16,
-                        letterSpacing: 0.5,
-                      }}>{item.title}</Text>
-                      <Text style={{
-                        color: '#444',
-                        fontSize: 18,
-                        marginLeft: 'auto',
-                      }}>›</Text>
-                    </TouchableOpacity>
-                  </Animated.View>
-                );
-              })}
-            </View>
+                      <TouchableOpacity
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 16,
+                          paddingHorizontal: 20,
+                          borderBottomWidth: 0.5,
+                          borderBottomColor: 'rgba(72, 202, 228, 0.3)',
+                        }}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          if (item.key === 'settings') {
+                            setProfileSubmenu('settings');
+                          }
+                        }}
+                      >
+                        <View style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 18,
+                          backgroundColor: '#f0f9ff',
+                          borderWidth: 0.5,
+                          borderColor: 'rgba(72, 202, 228, 0.3)',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                        }}>
+                          <Text style={{ fontSize: 16 }}>{item.icon}</Text>
+                        </View>
+                        <Text style={{
+                          color: '#000000',
+                          fontSize: 15,
+                          fontWeight: '500',
+                          marginLeft: 16,
+                          letterSpacing: 0.5,
+                        }}>{item.title}</Text>
+                        <Text style={{
+                          color: '#888',
+                          fontSize: 18,
+                          marginLeft: 'auto',
+                        }}>›</Text>
+                      </TouchableOpacity>
+                    </Animated.View>
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={{ paddingHorizontal: 8 }}>
+                {/* Back button row inside list */}
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 12,
+                    paddingHorizontal: 20,
+                    marginBottom: 10,
+                  }}
+                  activeOpacity={0.7}
+                  onPress={() => setProfileSubmenu('main')}
+                >
+                  <Text style={{ color: '#000000', fontSize: 16, fontWeight: '600' }}>← {t('back')}</Text>
+                </TouchableOpacity>
+
+                {[
+                  { key: 'language_settings', title: t('language_settings'), icon: '🌐' },
+                ].map((item, index) => {
+                  const translateY = profileContentProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [40 + index * 15, 0],
+                  });
+                  return (
+                    <Animated.View
+                      key={item.key}
+                      style={{
+                        opacity: profileContentProgress,
+                        transform: [{ translateY }],
+                      }}
+                    >
+                      <TouchableOpacity
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 16,
+                          paddingHorizontal: 20,
+                          borderBottomWidth: 0.5,
+                          borderBottomColor: 'rgba(72, 202, 228, 0.3)',
+                        }}
+                        activeOpacity={0.7}
+                        onPress={async () => {
+                          if (item.key === 'language_settings') {
+                            try {
+                              setHasSelectedLanguage(false);
+                              closeProfile();
+                            } catch (err) {
+                              console.warn('[Storage] Failed to open language settings:', err);
+                            }
+                          }
+                        }}
+                      >
+                        <View style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 18,
+                          backgroundColor: '#f0f9ff',
+                          borderWidth: 0.5,
+                          borderColor: 'rgba(72, 202, 228, 0.3)',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                        }}>
+                          <Text style={{ fontSize: 16 }}>{item.icon}</Text>
+                        </View>
+                        <Text style={{
+                          color: '#000000',
+                          fontSize: 15,
+                          fontWeight: '500',
+                          marginLeft: 16,
+                          letterSpacing: 0.5,
+                        }}>{item.title}</Text>
+                        <Text style={{
+                          color: '#888',
+                          fontSize: 18,
+                          marginLeft: 'auto',
+                        }}>›</Text>
+                      </TouchableOpacity>
+                    </Animated.View>
+                  );
+                })}
+              </View>
+            )}
 
           </ScrollView>
 
@@ -1424,11 +1663,11 @@ function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, re
 }
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
-const BG = '#000000';
-const SURFACE = '#0d0d0d';
-const BORDER = '#222222';
-const TEXT_PRIMARY = '#ffffff';
-const TEXT_SECONDARY = '#555555';
+const BG = '#ffffff';
+const SURFACE = '#f0f9ff';
+const BORDER = '#48cae4';
+const TEXT_PRIMARY = '#000000';
+const TEXT_SECONDARY = '#48cae4';
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -1444,15 +1683,20 @@ const styles = StyleSheet.create({
 
   // Header
   header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: Platform.OS === 'ios' ? 48 : 16,
     paddingBottom: 12,
     borderBottomWidth: 0.5,
     borderBottomColor: BORDER,
-    backgroundColor: BG,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
   },
 
   // WebSocket badge (styled as Card)
@@ -1720,14 +1964,14 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#0d0d0d',
+    backgroundColor: '#ffffff',
     borderWidth: 0.5,
-    borderColor: '#222222',
+    borderColor: '#48cae4',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#ffffff',
+    shadowColor: '#48cae4',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 5,
     zIndex: 998,
@@ -1748,28 +1992,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 20,
     borderWidth: 0.5,
-    borderColor: '#222222',
+    borderColor: '#48cae4',
   },
   overlayTitle: {
-    color: '#ffffff',
+    color: '#000000',
     fontSize: 16,
     fontWeight: '600',
   },
   closeButton: {
-    backgroundColor: '#1C1C1C',
+    backgroundColor: '#f0f9ff',
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 15,
     borderWidth: 0.5,
-    borderColor: '#222222',
+    borderColor: '#48cae4',
   },
   closeButtonText: {
-    color: '#ffffff',
+    color: '#000000',
     fontSize: 13,
     fontWeight: '600',
   },
@@ -1800,7 +2044,7 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
 
   return (
     <SafeAreaView style={langStyles.langContainer}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <View style={langStyles.langHeaderSection}>
         <Text style={langStyles.langTitle}>{localT('choose_lang')}</Text>
         <Text style={langStyles.langSubtitle}>{localT('select_pref_lang')}</Text>
@@ -1857,7 +2101,7 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
 const langStyles = StyleSheet.create({
   langContainer: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#ffffff',
     paddingHorizontal: 24,
   },
   langHeaderSection: {
@@ -1867,13 +2111,13 @@ const langStyles = StyleSheet.create({
   langTitle: {
     fontSize: 28,
     fontWeight: '800',
-    color: '#ffffff',
+    color: '#000000',
     letterSpacing: 0.5,
     marginBottom: 8,
   },
   langSubtitle: {
     fontSize: 14,
-    color: '#555555',
+    color: '#6c6c72',
     lineHeight: 20,
   },
   langList: {
@@ -1884,16 +2128,16 @@ const langStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#0d0d0d',
+    backgroundColor: '#f0f9ff',
     borderWidth: 0.5,
-    borderColor: '#222222',
+    borderColor: 'rgba(72, 202, 228, 0.3)',
     borderRadius: 14,
     paddingVertical: 18,
     paddingHorizontal: 20,
   },
   langCardSelected: {
-    borderColor: '#ffffff',
-    backgroundColor: '#111111',
+    borderColor: '#48cae4',
+    backgroundColor: '#e0f7fa',
   },
   langCardLeft: {
     gap: 4,
@@ -1901,27 +2145,27 @@ const langStyles = StyleSheet.create({
   langCardName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#ffffff',
+    color: '#000000',
   },
   langCardLabel: {
     fontSize: 13,
-    color: '#555555',
+    color: '#6c6c72',
   },
   langCheckbox: {
     width: 22,
     height: 22,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: 'rgba(72, 202, 228, 0.4)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   langCheckboxSelected: {
-    borderColor: '#ffffff',
-    backgroundColor: '#ffffff',
+    borderColor: '#48cae4',
+    backgroundColor: '#48cae4',
   },
   langCheckmark: {
-    color: '#000000',
+    color: '#ffffff',
     fontSize: 12,
     fontWeight: '900',
   },
@@ -1930,23 +2174,23 @@ const langStyles = StyleSheet.create({
     marginBottom: 10,
   },
   langContinueButton: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#48cae4',
     borderRadius: 30,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
   langContinueButtonDisabled: {
-    backgroundColor: '#111111',
+    backgroundColor: '#f0f9ff',
     borderWidth: 0.5,
-    borderColor: '#222222',
+    borderColor: 'rgba(72, 202, 228, 0.25)',
   },
   langContinueText: {
-    color: '#000000',
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
   },
   langContinueTextDisabled: {
-    color: '#333333',
+    color: 'rgba(72, 202, 228, 0.5)',
   },
 });
