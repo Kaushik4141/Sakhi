@@ -1057,7 +1057,7 @@ export default function App() {
         ) : (
           <>
             <Text style={styles.hint}>
-              {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Release to stop' : 'Hold to speak'}
+              {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Tap to end session' : 'Tap to start session'}
             </Text>
 
             {/* Outer glow ring */}
@@ -1071,10 +1071,9 @@ export default function App() {
               ]}
             />
 
-            {/* Push-to-Talk Button */}
+            {/* Live Session Toggle Button */}
             <Pressable
-              onPressIn={startRecording}
-              onPressOut={stopRecording}
+              onPress={toggleSession}
               disabled={!micGranted || isPttTransitioning}
               style={({ pressed }) => [styles.pttButtonWrapper]}
             >
@@ -1086,9 +1085,9 @@ export default function App() {
                   { transform: [{ scale: scaleAnim }] },
                 ]}
               >
-                <Text style={styles.pttIcon}>{isRecording ? '🔴' : '🎙️'}</Text>
+                <Text style={styles.pttIcon}>{isRecording ? '🛑' : '🎙️'}</Text>
                 <Text style={styles.pttLabel}>
-                  {micGranted ? (isRecording ? 'Listening…' : 'Push to Talk') : 'Awaiting Permission'}
+                  {micGranted ? (isRecording ? 'Live Session Active' : 'Connect') : 'Awaiting Permission'}
                 </Text>
               </Animated.View>
             </Pressable>
@@ -1099,8 +1098,8 @@ export default function App() {
                 : wsStatus === WS_STATUS.SENT
                 ? 'Audio sent ✓'
                 : isRecording
-                ? 'Audio is being captured'
-                : 'Press and hold the button to record'}
+                ? 'Listening continuously… (Gemini Live)'
+                : 'Tap to start a Live Session'}
             </Text>
           </>
         )}
