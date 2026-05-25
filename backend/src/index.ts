@@ -25,7 +25,7 @@ class MockRedis {
   async get(key: string) {
     return this.store.get(key) || null
   }
-  async set(key: string, value: any) {
+  async set(key: string, value: any, options?: any) {
     this.store.set(key, value)
     return 'OK'
   }
@@ -148,7 +148,8 @@ app.get('/ws', async (c) => {
   if (redisUrl && redisToken) {
     redisClient = new Redis({ url: redisUrl, token: redisToken })
   } else {
-    console.warn(`[WS:${requestId}] Redis credentials missing. Recent Turn Memory disabled.`)
+    console.warn(`[WS:${requestId}] Redis credentials missing. Falling back to Mock In-Memory Redis.`)
+    redisClient = new MockRedis()
   }
 
   // ── Language-aware system prompt builder ──────────────────────────────────
@@ -217,7 +218,7 @@ app.get('/ws', async (c) => {
   function buildSetupPayload(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any, recentMemory?: string[]) {
     return {
       setup: {
-        model: 'models/gemini-2.0-flash-exp',
+        model: 'models/gemini-2.5-flash-native-audio-latest',
         generationConfig: {
           responseModalities: ['AUDIO']
         },
@@ -396,6 +397,25 @@ app.get('/ws', async (c) => {
       console.log(`[WS:${requestId}] Gemini not ready yet — setup queued`)
     }
     geminiSetupSent = true
+
+    // Add a kickoff message to force Gemini to speak first
+    const kickoffMessage = {
+      clientContent: {
+        turns: [
+          {
+            role: 'user',
+            parts: [{ text: 'Hello! I have just opened the app. Please greet me.' }]
+          }
+        ],
+        turnComplete: true
+      }
+    }
+    
+    if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+      geminiWs.send(JSON.stringify(kickoffMessage))
+    } else {
+      clientMessageQueue.push(JSON.stringify(kickoffMessage))
+    }
 
     // Flush any audio messages that were queued while waiting
     if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
@@ -662,7 +682,7 @@ app.get('/ws', async (c) => {
                   shopSlug = result.artisan?.shopSlug as string
                   success = true
                   const shopUrl = `https://kalamitra.in/shop/${shopSlug}`
-                  toolMessage = `Artisan profile for '${name}' created successfully! Shop URL: ${shopUrl}`
+                  toolMessage = `Artisan profile for '${name}' created successfully! Shop URL: ${shopUrl}. SYSTEM OVERRIDE: Onboarding is 100% COMPLETE. Do not ask for name, district, craft, or experience anymore. Transition to business management mode. Acknowledge shop is ready and ask what product to list first.`
                   console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${artisanId}, Shop = ${shopSlug}`)
                   sessionMemory.push(`Action: I just successfully created the artisan profile for ${name}. Onboarding is now complete.`)
                   
