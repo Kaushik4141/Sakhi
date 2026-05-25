@@ -11,12 +11,147 @@ import {
   Platform,
   Dimensions,
   Easing,
+  ScrollView,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { useSharedValue, withTiming, useDerivedValue, useFrameCallback } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Canvas, Path, Skia, LinearGradient, vec } from '@shopify/react-native-skia';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ─── Translations Config ───────────────────────────────────────────────────────
+const TRANSLATIONS = {
+  en: {
+    sakhi: 'Sakhi',
+    menu: 'MENU',
+    profile: 'PROFILE',
+    rec: 'REC',
+    back: '← BACK',
+    photo: 'PHOTO',
+    artisan_name: 'Artisan Name',
+    analytics: 'Analytics',
+    orders: 'Orders',
+    news_updates: 'News & Updates',
+    settings: 'Settings',
+    language_settings: 'Language Settings',
+    connecting: 'Connecting…',
+    connected: 'Connected',
+    sending: 'Sending…',
+    sent: '✓ Sent',
+    ws_error: 'WS Error',
+    disconnected: 'Disconnected',
+    choose_lang: 'Choose your language',
+    select_pref_lang: 'Select your preferred language to get started with Sakhi',
+    continue: 'Continue',
+    loading: 'LOADING SAKHI…',
+    close: '✕ Close',
+    initializing_camera: 'Initializing camera…',
+    sakhi_lens: 'Sakhi Lens',
+    mic_needed_title: 'Microphone Access Needed',
+    mic_needed_body: 'Sakhi needs your microphone for Push to Talk. Please grant Microphone permission in your device Settings.',
+    cam_needed_title: 'Camera Access Needed',
+    cam_needed_body: 'Sakhi needs your camera to show a live feed. Please grant Camera permission in your device Settings.',
+    grant_perm: 'Grant Permission',
+  },
+  hi: {
+    sakhi: 'सखी',
+    menu: 'मेन्यू',
+    profile: 'प्रोफाइल',
+    rec: 'रिकॉर्ड',
+    back: '← वापस',
+    photo: 'फोटो',
+    artisan_name: 'कारीगर का नाम',
+    analytics: 'विश्लेषण',
+    orders: 'आदेश',
+    news_updates: 'समाचार और अपडेट',
+    settings: 'सेटिंग्स',
+    language_settings: 'भाषा सेटिंग्स',
+    connecting: 'कनेक्ट हो रहा है…',
+    connected: 'कनेक्टेड',
+    sending: 'भेजा जा रहा है…',
+    sent: '✓ भेजा गया',
+    ws_error: 'कनेक्शन त्रुटि',
+    disconnected: 'डिस्कनेक्टेड',
+    choose_lang: 'अपनी भाषा चुनें',
+    select_pref_lang: 'सखी के साथ शुरुआत करने के लिए अपनी पसंदीदा भाषा चुनें',
+    continue: 'जारी रखें',
+    loading: 'सखी लोड हो रही है…',
+    close: '✕ बंद करें',
+    initializing_camera: 'कैमरा शुरू किया जा रहा है…',
+    sakhi_lens: 'सखी लेंस',
+    mic_needed_title: 'माइक्रोफोन एक्सेस की आवश्यकता है',
+    mic_needed_body: 'पुश टू टॉक के लिए सखी को आपके माइक्रोफ़ोन की आवश्यकता है। कृपया अपने डिवाइस सेटिंग्स में माइक्रोफ़ोन अनुमति दें।',
+    cam_needed_title: 'कैमरा एक्सेस की आवश्यकता है',
+    cam_needed_body: 'लाइव फीड दिखाने के लिए सखी को आपके कैमरे की आवश्यकता है। कृपया अपने डिवाइस सेटिंग्स में कैमरा अनुमति दें।',
+    grant_perm: 'अनुमति दें',
+  },
+  kn: {
+    sakhi: 'ಸಖಿ',
+    menu: 'ಮೆನು',
+    profile: 'ಪ್ರೊಫೈಲ್',
+    rec: 'ರೆಕಾರ್ಡ್',
+    back: '← ಹಿಂದೆ',
+    photo: 'ಫೋಟೋ',
+    artisan_name: 'ಕುಶಲಕರ್ಮಿ ಹೆಸರು',
+    analytics: 'ವಿಶ್ಲೇಷಣೆ',
+    orders: 'ಆದೇಶಗಳು',
+    news_updates: 'ಸುದ್ದಿ ಮತ್ತು ನವೀಕರಣಗಳು',
+    settings: 'ಸೆಟ್ಟಿಂಗ್‌ಗಳು',
+    language_settings: 'ಭಾಷಾ ಸೆಟ್ಟಿಂಗ್‌ಗಳು',
+    connecting: 'ಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿದೆ…',
+    connected: 'ಸಂಪರ್ಕಗೊಂಡಿದೆ',
+    sending: 'ಕಳುಹಿಸಲಾಗುತ್ತಿದೆ…',
+    sent: '✓ ಕಳುಹಿಸಲಾಗಿದೆ',
+    ws_error: 'ಸಂಪರ್ಕ ದೋಷ',
+    disconnected: 'ಸಂಪರ್ಕ ಕಡಿತಗೊಂಡಿದೆ',
+    choose_lang: 'ನಿಮ್ಮ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ',
+    select_pref_lang: 'ಸಖಿಯೊಂದಿಗೆ ಪ್ರಾರಂಭಿಸಲು ನಿಮ್ಮ ಆದ್ಯತೆಯ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ',
+    continue: 'ಮುಂದುವರಿಯಿರಿ',
+    loading: 'ಸಖಿ ಲೋಡ್ ಆಗುತ್ತಿದೆ…',
+    close: '✕ ಮುಚ್ಚಿ',
+    initializing_camera: 'ಕ್ಯಾಮೆರಾ ಪ್ರಾರಂಭಿಸಲಾಗುತ್ತಿದೆ…',
+    sakhi_lens: 'ಸಖಿ ಲೆನ್ಸ್',
+    mic_needed_title: 'ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿ ಅಗತ್ಯವಿದೆ',
+    mic_needed_body: 'ಮಾತನಾಡಲು ಸಖಿಗೆ ನಿಮ್ಮ ಮೈಕ್ರೊಫೋನ್ ಅಗತ್ಯವಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸಾಧನದ ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿ ನೀಡಿ.',
+    cam_needed_title: 'ಕ್ಯಾಮೆರಾ ಅನುಮತಿ ಅಗತ್ಯವಿದೆ',
+    cam_needed_body: 'ಲೈವ್ ಫೀಡ್ ತೋರಿಸಲು ಸಖಿಗೆ ನಿಮ್ಮ ಕ್ಯಾಮೆರಾ ಅಗತ್ಯವಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸಾಧನದ ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ಕ್ಯಾಮೆರಾ ಅನುಮತಿ ನೀಡಿ.',
+    grant_perm: 'ಅನುಮತಿ ನೀಡಿ',
+  },
+  es: {
+    sakhi: 'Sakhi',
+    menu: 'MENÚ',
+    profile: 'PERFIL',
+    rec: 'GRABANDO',
+    back: '← ATRÁS',
+    photo: 'FOTO',
+    artisan_name: 'Nombre del Artesano',
+    analytics: 'Estadísticas',
+    orders: 'Pedidos',
+    news_updates: 'Noticias y Actualizaciones',
+    settings: 'Ajustes',
+    language_settings: 'Ajustes de Idioma',
+    connecting: 'Conectando…',
+    connected: 'Conectado',
+    sending: 'Enviando…',
+    sent: '✓ Enviado',
+    ws_error: 'Error de WS',
+    disconnected: 'Desconectado',
+    choose_lang: 'Elige tu idioma',
+    select_pref_lang: 'Selecciona tu idioma de preferencia para comenzar con Sakhi',
+    continue: 'Continuar',
+    loading: 'CARGANDO SAKHI…',
+    close: '✕ Cerrar',
+    initializing_camera: 'Inicializando cámara…',
+    sakhi_lens: 'Lente Sakhi',
+    mic_needed_title: 'Se requiere acceso al micrófono',
+    mic_needed_body: 'Sakhi necesita su micrófono para hablar. Otorgue el permiso en la configuración de su dispositivo.',
+    cam_needed_title: 'Se requiere acceso a la cámara',
+    cam_needed_body: 'Sakhi necesita su cámara para mostrar la transmisión en vivo. Otorgue el permiso en la configuración de su dispositivo.',
+    grant_perm: 'Otorgar Permiso',
+  }
+};
+
 
 // ─── WebSocket Config ──────────────────────────────────────────────────────────
 const WS_URL = 'ws://localhost:8787/ws';
@@ -41,7 +176,7 @@ const PERM_STATUS = {
 };
 
 // ─── Denied Screen ─────────────────────────────────────────────────────────────
-function PermissionDeniedScreen({ type, onRetry }) {
+function PermissionDeniedScreen({ type, onRetry, t }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
@@ -52,12 +187,11 @@ function PermissionDeniedScreen({ type, onRetry }) {
     ]).start();
   }, []);
 
+  const translate = t || ((key) => TRANSLATIONS['en'][key]);
+
   const icon = type === 'camera' ? '📷' : '🎙️';
-  const title = type === 'camera' ? 'Camera Access Needed' : 'Microphone Access Needed';
-  const body =
-    type === 'camera'
-      ? "Sakhi needs your camera to show a live feed. Please grant Camera permission in your device Settings."
-      : "Sakhi needs your microphone for Push to Talk. Please grant Microphone permission in your device Settings.";
+  const title = type === 'camera' ? translate('cam_needed_title') : translate('mic_needed_title');
+  const body = type === 'camera' ? translate('cam_needed_body') : translate('mic_needed_body');
 
   return (
     <Animated.View
@@ -67,7 +201,7 @@ function PermissionDeniedScreen({ type, onRetry }) {
       <Text style={styles.permTitle}>{title}</Text>
       <Text style={styles.permBody}>{body}</Text>
       <TouchableOpacity style={styles.retryButton} onPress={onRetry} activeOpacity={0.8}>
-        <Text style={styles.retryButtonText}>Grant Permission</Text>
+        <Text style={styles.retryButtonText}>{translate('grant_perm')}</Text>
       </TouchableOpacity>
     </Animated.View>
   );
@@ -77,6 +211,14 @@ function PermissionDeniedScreen({ type, onRetry }) {
 
 // ─── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
+  const [appReady, setAppReady] = useState(false);
+  const [hasSelectedLanguage, setHasSelectedLanguage] = useState(false);
+  const [currentLanguage, setCurrentLanguage] = useState('en');
+
+  const t = (key) => {
+    return TRANSLATIONS[currentLanguage]?.[key] || TRANSLATIONS['en']?.[key] || key;
+  };
+
   // Camera permissions (expo-camera hook)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
@@ -152,7 +294,6 @@ export default function App() {
   useFrameCallback((frameInfo) => {
     time.value = frameInfo.timeSinceFirstFrame / 1000;
     renderAmp.value = renderAmp.value + (amplitudeRef.value - renderAmp.value) * 0.12;
-    console.log('renderAmp:', renderAmp.value);
   });
 
   const wave1 = useDerivedValue(() => {
@@ -462,22 +603,45 @@ export default function App() {
     }
   }).current;
 
-  // ── On Mount: Permissions + WebSocket ─────────────────────────────────────
+  // ── Check Language Selection on Mount ──────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const granted = await requestMicPermission();
-      // Configure audio session
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      if (granted) {
-        startRecording();
+      try {
+        const savedLang = await AsyncStorage.getItem('user_language');
+        if (savedLang) {
+          setCurrentLanguage(savedLang);
+          setHasSelectedLanguage(true);
+        }
+      } catch (err) {
+        console.warn('[Storage] Failed to read language:', err);
+      } finally {
+        setAppReady(true);
       }
+    })();
+  }, []);
 
-      // Start Gemini Live Session
-      geminiLiveSession.connect();
+  // ── On Mount: Permissions + WebSocket ─────────────────────────────────────
+  useEffect(() => {
+    if (!hasSelectedLanguage) return;
+
+    (async () => {
+      try {
+        const granted = await requestMicPermission();
+        // Configure audio session
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+        });
+
+        if (granted) {
+          await startRecording();
+        }
+
+        // Start Gemini Live Session
+        geminiLiveSession.connect();
+      } catch (err) {
+        console.warn('[Init] Failed to initialize mic or socket:', err);
+      }
     })();
 
     // Cleanup on unmount
@@ -485,7 +649,7 @@ export default function App() {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       geminiLiveSession.disconnect();
     };
-  }, [geminiLiveSession, requestMicPermission, startRecording]);
+  }, [hasSelectedLanguage, geminiLiveSession, requestMicPermission, startRecording]);
 
   // ── Glow Loop While Recording ─────────────────────────────────────────────
   useEffect(() => {
@@ -513,38 +677,59 @@ export default function App() {
 
   // ── WS Status Badge config ────────────────────────────────────────────────
   const wsStatusConfig = {
-    [WS_STATUS.CONNECTING]: { label: 'Connecting…', color: '#F59E0B', dot: '#F59E0B' },
-    [WS_STATUS.CONNECTED]:  { label: 'Connected',   color: '#22C55E', dot: '#22C55E' },
-    [WS_STATUS.SENDING]:    { label: 'Sending…',    color: '#FFFFFF', dot: '#FFFFFF' },
-    [WS_STATUS.SENT]:       { label: '✓ Sent',      color: '#34D399', dot: '#34D399' },
-    [WS_STATUS.ERROR]:      { label: 'WS Error',    color: '#EF4444', dot: '#EF4444' },
-    [WS_STATUS.CLOSED]:     { label: 'Disconnected',color: '#555555', dot: '#555555' },
+    [WS_STATUS.CONNECTING]: { label: t('connecting'), color: '#F59E0B', dot: '#F59E0B' },
+    [WS_STATUS.CONNECTED]:  { label: t('connected'),   color: '#22C55E', dot: '#22C55E' },
+    [WS_STATUS.SENDING]:    { label: t('sending'),    color: '#FFFFFF', dot: '#FFFFFF' },
+    [WS_STATUS.SENT]:       { label: t('sent'),       color: '#34D399', dot: '#34D399' },
+    [WS_STATUS.ERROR]:      { label: t('ws_error'),    color: '#EF4444', dot: '#EF4444' },
+    [WS_STATUS.CLOSED]:     { label: t('disconnected'),color: '#555555', dot: '#555555' },
   };
   const wsBadge = wsStatusConfig[wsStatus];
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  if (!appReady) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" />
+        <Text style={{ color: '#555', fontSize: 14, letterSpacing: 2 }}>{t('loading')}</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!hasSelectedLanguage) {
+    return (
+      <LanguageSelectionScreen
+        currentLanguage={currentLanguage}
+        onSelect={(lang) => {
+          setCurrentLanguage(lang);
+          setHasSelectedLanguage(true);
+        }}
+      />
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
 
       {/* ── Header ── */}
       <View style={styles.header}>
-        {/* Profile section top-left */}
+        {/* Hamburger Menu top-left */}
         <TouchableOpacity style={{ alignItems: 'center' }} activeOpacity={0.8} onPress={openProfile}>
-          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#1a1a1a', borderWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '700' }}>A</Text>
+          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#1a1a1a', borderWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: '400' }}>☰</Text>
           </View>
-          <Text style={{ fontSize: 9, color: '#555', letterSpacing: 1, marginTop: 3 }}>PROFILE</Text>
+          <Text style={{ fontSize: 9, color: '#555', letterSpacing: 1, marginTop: 3 }}>{t('menu')}</Text>
         </TouchableOpacity>
 
         {/* Right side container: Sakhi & Connection status pill */}
         <View style={{ alignItems: 'flex-end', gap: 4, marginLeft: 'auto' }}>
-          <Text style={styles.headerTitle}>Sakhi</Text>
+          <Text style={styles.headerTitle}>{t('sakhi')}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {isRecording && (
               <Animated.View style={[styles.recIndicator, { opacity: glowAnim }]}>
                 <View style={styles.recDot} />
-                <Text style={styles.recText}>REC</Text>
+                <Text style={styles.recText}>{t('rec')}</Text>
               </Animated.View>
             )}
             {/* WebSocket status badge */}
@@ -562,7 +747,7 @@ export default function App() {
       {/* ── Bottom Half: Push to Talk ── */}
       <View style={styles.bottomSection}>
         {micDenied && (
-          <PermissionDeniedScreen type="microphone" onRetry={requestMicPermission} />
+          <PermissionDeniedScreen type="microphone" onRetry={requestMicPermission} t={t} />
         )}
       </View>
 
@@ -626,6 +811,7 @@ export default function App() {
           cameraLoading={cameraLoading}
           cameraDenied={cameraDenied}
           requestCameraPermission={requestCameraPermission}
+          t={t}
         />
       )}
 
@@ -646,81 +832,156 @@ export default function App() {
             justifyContent: 'space-between',
             alignItems: 'center',
             paddingHorizontal: 24,
-            marginBottom: 0,
+            marginBottom: 10,
             opacity: profileContentProgress,
           }}>
             <TouchableOpacity onPress={closeProfile}>
-              <Text style={{ color: '#fff', fontSize: 13, letterSpacing: 1 }}>← BACK</Text>
+              <Text style={{ color: '#fff', fontSize: 13, letterSpacing: 1 }}>{t('back')}</Text>
             </TouchableOpacity>
             <Text style={{
               color: '#fff',
               fontSize: 20,
               fontWeight: '800',
               letterSpacing: 4,
-            }}>SAKHI</Text>
+            }}>{t('sakhi').toUpperCase()}</Text>
           </Animated.View>
 
-          {/* Center content — matches sketch */}
-          <View style={{
-            flex: 1,
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: 24,
-          }}>
-
-            {/* Profile picture circle */}
-            <Animated.View style={{
-              width: 180,
-              height: 180,
-              borderRadius: 90,
-              backgroundColor: '#111',
-              borderWidth: 0.5,
-              borderColor: '#333',
-              justifyContent: 'center',
+          {/* Scrollable menu content */}
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 40 }}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Centered Profile Card */}
+            <View style={{
               alignItems: 'center',
-              overflow: 'hidden',
-              opacity: profileContentProgress,
-              transform: [{
-                scale: profileContentProgress.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.8, 1],
-                })
-              }]
+              marginTop: 20,
+              marginBottom: 30,
+              gap: 16,
             }}>
-              {/* Replace with <Image source={profileImage} style={{ width: 180, height: 180 }} /> when available */}
-              <Text style={{ color: '#555', fontSize: 12, letterSpacing: 1.5 }}>PHOTO</Text>
-            </Animated.View>
+              {/* Profile picture circle */}
+              <Animated.View style={{
+                width: 100,
+                height: 100,
+                borderRadius: 50,
+                backgroundColor: '#111',
+                borderWidth: 0.5,
+                borderColor: '#333',
+                justifyContent: 'center',
+                alignItems: 'center',
+                overflow: 'hidden',
+                opacity: profileContentProgress,
+                transform: [{
+                  scale: profileContentProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.8, 1],
+                  })
+                }]
+              }}>
+                <Text style={{ color: '#555', fontSize: 10, letterSpacing: 1 }}>{t('photo')}</Text>
+              </Animated.View>
 
-            {/* Name pill — matches sketch rectangle */}
-            <Animated.View style={{
-              borderWidth: 0.5,
-              borderColor: '#333',
-              borderRadius: 10,
-              paddingVertical: 14,
-              paddingHorizontal: 40,
-              backgroundColor: '#0d0d0d',
-              minWidth: 200,
-              alignItems: 'center',
-              opacity: profileContentProgress,
-              transform: [{
-                translateY: profileContentProgress.interpolate({
+              {/* Name pill */}
+              <Animated.View style={{
+                borderWidth: 0.5,
+                borderColor: '#333',
+                borderRadius: 10,
+                paddingVertical: 10,
+                paddingHorizontal: 30,
+                backgroundColor: '#0d0d0d',
+                minWidth: 160,
+                alignItems: 'center',
+                opacity: profileContentProgress,
+                transform: [{
+                  translateY: profileContentProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [20, 0],
+                  })
+                }]
+              }}>
+                <Text style={{
+                  color: '#fff',
+                  fontSize: 16,
+                  fontWeight: '600',
+                  letterSpacing: 1,
+                }}>{t('artisan_name')}</Text>
+              </Animated.View>
+            </View>
+
+            {/* Menu List Options */}
+            <View style={{ paddingHorizontal: 8 }}>
+              {[
+                { key: 'analytics', title: t('analytics'), icon: '📊' },
+                { key: 'orders', title: t('orders'), icon: '📦' },
+                { key: 'news_updates', title: t('news_updates'), icon: '📢' },
+                { key: 'language_settings', title: t('language_settings'), icon: '🌐' },
+                { key: 'settings', title: t('settings'), icon: '⚙️' },
+              ].map((item, index) => {
+                const translateY = profileContentProgress.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [25, 0],
-                })
-              }]
-            }}>
-              <Text style={{
-                color: '#fff',
-                fontSize: 18,
-                fontWeight: '600',
-                letterSpacing: 1,
-              }}>Artisan Name</Text>
-            </Animated.View>
+                  outputRange: [40 + index * 15, 0],
+                });
+                return (
+                  <Animated.View
+                    key={item.key}
+                    style={{
+                      opacity: profileContentProgress,
+                      transform: [{ translateY }],
+                    }}
+                  >
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 16,
+                        paddingHorizontal: 20,
+                        borderBottomWidth: 0.5,
+                        borderBottomColor: '#222',
+                      }}
+                      activeOpacity={0.7}
+                      onPress={async () => {
+                        if (item.key === 'language_settings') {
+                          try {
+                            setHasSelectedLanguage(false);
+                            closeProfile();
+                          } catch (err) {
+                            console.warn('[Storage] Failed to open language settings:', err);
+                          }
+                        }
+                      }}
+                    >
+                      <View style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 18,
+                        backgroundColor: '#111',
+                        borderWidth: 0.5,
+                        borderColor: '#333',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}>
+                        <Text style={{ fontSize: 16 }}>{item.icon}</Text>
+                      </View>
+                      <Text style={{
+                        color: '#fff',
+                        fontSize: 15,
+                        fontWeight: '500',
+                        marginLeft: 16,
+                        letterSpacing: 0.5,
+                      }}>{item.title}</Text>
+                      <Text style={{
+                        color: '#444',
+                        fontSize: 18,
+                        marginLeft: 'auto',
+                      }}>›</Text>
+                    </TouchableOpacity>
+                  </Animated.View>
+                );
+              })}
+            </View>
 
-            {/* Leave blank space below for future additions */}
-            <View style={{ height: 120 }} />
+          </ScrollView>
 
-          </View>
         </Animated.View>
       )}
     </SafeAreaView>
@@ -728,7 +989,7 @@ export default function App() {
 }
 
 // ─── CameraOverlay Component ──────────────────────────────────────────────────
-function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, requestCameraPermission }) {
+function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, requestCameraPermission, t }) {
   useEffect(() => {
     if (!cameraGranted && !cameraDenied && !cameraLoading) {
       requestCameraPermission();
@@ -739,10 +1000,10 @@ function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, re
     <View style={styles.overlayContainer}>
       {cameraLoading ? (
         <View style={styles.cameraPlaceholder}>
-          <Text style={styles.loadingText}>Initializing camera…</Text>
+          <Text style={styles.loadingText}>{t('initializing_camera')}</Text>
         </View>
       ) : cameraDenied ? (
-        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
+        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} t={t} />
       ) : cameraGranted ? (
         <CameraView style={StyleSheet.absoluteFillObject} facing="back">
           {/* Corner frame overlays */}
@@ -753,14 +1014,14 @@ function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, re
 
           {/* Header overlay */}
           <View style={styles.overlayHeader}>
-            <Text style={styles.overlayTitle}>Sakhi Lens</Text>
+            <Text style={styles.overlayTitle}>{t('sakhi_lens')}</Text>
             <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.8}>
-              <Text style={styles.closeButtonText}>✕ Close</Text>
+              <Text style={styles.closeButtonText}>{t('close')}</Text>
             </TouchableOpacity>
           </View>
         </CameraView>
       ) : (
-        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
+        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} t={t} />
       )}
     </View>
   );
@@ -1106,5 +1367,181 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '600',
+  },
+});
+
+// ─── LanguageSelectionScreen Component ──────────────────────────────────────────
+function LanguageSelectionScreen({ onSelect, currentLanguage }) {
+  const languages = [
+    { code: 'en', name: 'English', label: 'English' },
+    { code: 'hi', name: 'Hindi', label: 'हिन्दी' },
+    { code: 'kn', name: 'Kannada', label: 'ಕನ್ನಡ' },
+    { code: 'es', name: 'Spanish', label: 'Español' },
+  ];
+
+  const [selected, setSelected] = useState(currentLanguage || null);
+
+  const handleContinue = () => {
+    if (!selected) return;
+    // Persist language choice in background without blocking screen transition
+    AsyncStorage.setItem('user_language', selected).catch((err) => {
+      console.warn('[Storage] Failed to save language:', err);
+    });
+    onSelect(selected);
+  };
+
+  const activeLang = selected || currentLanguage || 'en';
+  const localT = (key) => TRANSLATIONS[activeLang]?.[key] || TRANSLATIONS['en']?.[key] || key;
+
+  return (
+    <SafeAreaView style={langStyles.langContainer}>
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <View style={langStyles.langHeaderSection}>
+        <Text style={langStyles.langTitle}>{localT('choose_lang')}</Text>
+        <Text style={langStyles.langSubtitle}>{localT('select_pref_lang')}</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={langStyles.langList} showsVerticalScrollIndicator={false}>
+        {languages.map((lang) => {
+          const isSelected = selected === lang.code;
+          return (
+            <TouchableOpacity
+              key={lang.code}
+              style={[
+                langStyles.langCard,
+                isSelected && langStyles.langCardSelected
+              ]}
+              activeOpacity={0.8}
+              onPress={() => setSelected(lang.code)}
+            >
+              <View style={langStyles.langCardLeft}>
+                <Text style={langStyles.langCardName}>{lang.name}</Text>
+                <Text style={langStyles.langCardLabel}>{lang.label}</Text>
+              </View>
+              <View style={[
+                langStyles.langCheckbox,
+                isSelected && langStyles.langCheckboxSelected
+              ]}>
+                {isSelected && <Text style={langStyles.langCheckmark}>✓</Text>}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      <View style={langStyles.langFooter}>
+        <TouchableOpacity
+          style={[
+            langStyles.langContinueButton,
+            !selected && langStyles.langContinueButtonDisabled
+          ]}
+          disabled={!selected}
+          activeOpacity={0.8}
+          onPress={handleContinue}
+        >
+          <Text style={[
+            langStyles.langContinueText,
+            !selected && langStyles.langContinueTextDisabled
+          ]}>{localT('continue')}</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const langStyles = StyleSheet.create({
+  langContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+    paddingHorizontal: 24,
+  },
+  langHeaderSection: {
+    marginTop: 40,
+    marginBottom: 30,
+  },
+  langTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  langSubtitle: {
+    fontSize: 14,
+    color: '#555555',
+    lineHeight: 20,
+  },
+  langList: {
+    gap: 16,
+    paddingBottom: 20,
+  },
+  langCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#0d0d0d',
+    borderWidth: 0.5,
+    borderColor: '#222222',
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+  },
+  langCardSelected: {
+    borderColor: '#ffffff',
+    backgroundColor: '#111111',
+  },
+  langCardLeft: {
+    gap: 4,
+  },
+  langCardName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  langCardLabel: {
+    fontSize: 13,
+    color: '#555555',
+  },
+  langCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#333333',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  langCheckboxSelected: {
+    borderColor: '#ffffff',
+    backgroundColor: '#ffffff',
+  },
+  langCheckmark: {
+    color: '#000000',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  langFooter: {
+    paddingVertical: 20,
+    marginBottom: 10,
+  },
+  langContinueButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 30,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  langContinueButtonDisabled: {
+    backgroundColor: '#111111',
+    borderWidth: 0.5,
+    borderColor: '#222222',
+  },
+  langContinueText: {
+    color: '#000000',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  langContinueTextDisabled: {
+    color: '#333333',
   },
 });
