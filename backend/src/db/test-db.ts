@@ -49,31 +49,17 @@ export async function runTestFlow(db: D1Database, redisClient: Redis) {
     if (!sync1.success) throw new Error(`Sync 1 failed: ${sync1.error}`);
     logMsg(`-> Success! Cache updated. Initial Revenue: ${sync1.snapshot?.totalRevenue}, Low-Stock Products Count: ${sync1.snapshot?.lowStockProducts.length}`);
 
-    // Step 3.5: Create a pending order for 2 sarees
-    logMsg("\nStep 3.5: Creating pending buyer order for 2 sarees...");
-    const drizzleDb = getDrizzle(db);
-    const mockOrder = await drizzleDb
-      .insert(orders)
-      .values({
-        productId: product.id,
-        amount: 2,
-        status: 'pending'
-      })
-      .returning();
-    const orderId = mockOrder[0].id;
-    logMsg(`-> Success! Order ID: ${orderId}, Status: ${mockOrder[0].status}, Amount: ${mockOrder[0].amount}`);
-
-    // Step 4: processOrderPayment
-    logMsg(`\nStep 4: Simulating order payment for Order '${orderId}' via processOrderPayment...`);
-    const paymentResult = await processOrderPayment(db, orderId);
+    // Step 4: processOrderPayment (Simulates a buyer purchasing 2 sarees, creating a paid order and decrementing stock)
+    logMsg(`\nStep 4: Simulating buyer purchasing 2 sarees via processOrderPayment...`);
+    const paymentResult = await processOrderPayment(db, product.id, 2);
     if (!paymentResult.success) throw new Error(`Payment processing failed: ${paymentResult.error}`);
-    logMsg(`-> Success! Status updated to 'paid'. Product: ${paymentResult.productName}, Remaining Stock: ${paymentResult.remainingStock}`);
+    logMsg(`-> Success! Order recorded as 'paid'. Remaining Stock: ${paymentResult.remainingStock}`);
 
     // Step 5: syncTelemetryToRedis again
     logMsg("\nStep 5: Synchronizing telemetry again via syncTelemetryToRedis...");
     const sync2 = await syncTelemetryToRedis(db, redisClient, artisanId);
     if (!sync2.success) throw new Error(`Sync 2 failed: ${sync2.error}`);
-    logMsg(`-> Success! Cache updated. New Revenue: ${sync2.snapshot?.totalRevenue}, Remaining Stock in Cache: ${sync2.snapshot?.lowStockProducts[0]?.stock}`);
+    logMsg(`-> Success! Cache updated. New Revenue: ${sync2.snapshot?.totalRevenue}, Top Selling Product: ${sync2.snapshot?.topSellingItem}, Low-Stock Products Count: ${sync2.snapshot?.lowStockProducts.length}`);
 
     // Step 6: getBusinessSnapshot
     logMsg("\nStep 6: Retrieving instant snapshot via getBusinessSnapshot...");
