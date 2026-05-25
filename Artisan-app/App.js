@@ -19,7 +19,7 @@ import { Audio } from 'expo-av';
 import { WebView } from 'react-native-webview';
 import { useSharedValue, withTiming, useDerivedValue, useFrameCallback } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Canvas, Path, Skia, LinearGradient, vec } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia, LinearGradient, vec, BlurMask } from '@shopify/react-native-skia';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─── Translations Config ───────────────────────────────────────────────────────
@@ -155,6 +155,64 @@ const TRANSLATIONS = {
 };
 
 
+// ─── Amplitude Decodification from PCM ─────────────────────────────────────────
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const BASE64_LOOKUP = new Uint8Array(256);
+for (let i = 0; i < 64; i++) {
+  BASE64_LOOKUP[BASE64_CHARS.charCodeAt(i)] = i;
+}
+
+function decodeBase64ToSamples(base64) {
+  const cleanBase64 = base64.replace(/=/g, '');
+  const len = cleanBase64.length;
+  const byteLength = Math.floor((len * 6) / 8);
+  const bytes = new Uint8Array(byteLength);
+  
+  let byteIdx = 0;
+  for (let i = 0; i < len; i += 4) {
+    const c1 = BASE64_LOOKUP[cleanBase64.charCodeAt(i)] || 0;
+    const c2 = BASE64_LOOKUP[cleanBase64.charCodeAt(i + 1)] || 0;
+    const c3 = BASE64_LOOKUP[cleanBase64.charCodeAt(i + 2)] || 0;
+    const c4 = BASE64_LOOKUP[cleanBase64.charCodeAt(i + 3)] || 0;
+    
+    bytes[byteIdx++] = (c1 << 2) | (c2 >> 4);
+    if (byteIdx < byteLength) {
+      bytes[byteIdx++] = ((c2 & 15) << 4) | (c3 >> 2);
+    }
+    if (byteIdx < byteLength) {
+      bytes[byteIdx++] = ((c3 & 3) << 6) | c4;
+    }
+  }
+
+  const sampleCount = Math.floor(byteLength / 2);
+  const samples = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    const b1 = bytes[i * 2];
+    const b2 = bytes[i * 2 + 1];
+    let val = b1 | (b2 << 8);
+    if (val & 0x8000) val -= 0x10000;
+    samples[i] = val / 32768.0;
+  }
+  
+  return samples;
+}
+
+function getVolumeFromBase64Pcm(base64) {
+  try {
+    const samples = decodeBase64ToSamples(base64);
+    if (samples.length === 0) return 0;
+    
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      sumSquares += samples[i] * samples[i];
+    }
+    return Math.sqrt(sumSquares / samples.length);
+  } catch (err) {
+    console.warn('[Volume] Failed to calculate volume:', err);
+    return 0;
+  }
+}
+
 // ─── WebSocket Config ──────────────────────────────────────────────────────────
 function getDevServerHost() {
   const scriptURL = NativeModules.SourceCode?.scriptURL;
@@ -201,7 +259,7 @@ const PCM_RECORDER_HTML = `
 
           audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
           source = audioContext.createMediaStreamSource(stream);
-          processor = audioContext.createScriptProcessor(4096, 1, 1);
+          processor = audioContext.createScriptProcessor(2048, 1, 1);
 
           processor.onaudioprocess = function(event) {
             if (!isRecording) return;
@@ -817,112 +875,71 @@ export default function App() {
 
   const wave1 = useDerivedValue(() => {
     const strokePath = Skia.Path.Make();
-    const fillPath = Skia.Path.Make();
-    const baseline = 60;
+    const baseline = 100;
     const phaseOffset = 0;
-    const freq = 1.8;
-    const speed = 2.5;
-
-    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
-    strokePath.moveTo(0, startY);
-    fillPath.moveTo(0, startY);
-
+    const freq = 1.6;
+    const speed = 2.0;
+    strokePath.moveTo(0, baseline);
+    const amplitude = 1.5 + renderAmp.value;
     for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const envelope = Math.sin((x / screenWidth) * Math.PI);
       const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
-      const y = baseline + renderAmp.value * Math.sin(angle);
+      const y = baseline - amplitude * Math.sin(angle) * envelope;
       strokePath.lineTo(x, y);
-      fillPath.lineTo(x, y);
     }
-    fillPath.lineTo(screenWidth, 120);
-    fillPath.lineTo(0, 120);
-    fillPath.close();
-
-    return { stroke: strokePath, fill: fillPath };
+    return strokePath;
   });
 
   const wave2 = useDerivedValue(() => {
     const strokePath = Skia.Path.Make();
-    const fillPath = Skia.Path.Make();
-    const baseline = 60;
-    const phaseOffset = 2.2;
-    const freq = 2.4;
-    const speed = -1.8;
-
-    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
-    strokePath.moveTo(0, startY);
-    fillPath.moveTo(0, startY);
-
+    const baseline = 100;
+    const phaseOffset = 1.8;
+    const freq = 2.2;
+    const speed = -1.5;
+    strokePath.moveTo(0, baseline);
+    const amplitude = 1.2 + renderAmp.value * 0.85;
     for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const envelope = Math.sin((x / screenWidth) * Math.PI);
       const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
-      const y = baseline + renderAmp.value * Math.sin(angle);
+      const y = baseline - amplitude * Math.cos(angle) * envelope;
       strokePath.lineTo(x, y);
-      fillPath.lineTo(x, y);
     }
-    fillPath.lineTo(screenWidth, 120);
-    fillPath.lineTo(0, 120);
-    fillPath.close();
-
-    return { stroke: strokePath, fill: fillPath };
+    return strokePath;
   });
 
   const wave3 = useDerivedValue(() => {
     const strokePath = Skia.Path.Make();
-    const fillPath = Skia.Path.Make();
-    const baseline = 60;
-    const phaseOffset = 4.5;
-    const freq = 1.3;
-    const speed = 1.2;
-
-    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
-    strokePath.moveTo(0, startY);
-    fillPath.moveTo(0, startY);
-
+    const baseline = 100;
+    const phaseOffset = 3.5;
+    const freq = 1.2;
+    const speed = 1.0;
+    strokePath.moveTo(0, baseline);
+    const amplitude = 1.0 + renderAmp.value * 0.7;
     for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const envelope = Math.sin((x / screenWidth) * Math.PI);
       const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
-      const y = baseline + renderAmp.value * Math.sin(angle);
+      const y = baseline - amplitude * Math.sin(angle) * envelope;
       strokePath.lineTo(x, y);
-      fillPath.lineTo(x, y);
     }
-    fillPath.lineTo(screenWidth, 120);
-    fillPath.lineTo(0, 120);
-    fillPath.close();
-
-    return { stroke: strokePath, fill: fillPath };
+    return strokePath;
   });
 
   const wave4 = useDerivedValue(() => {
     const strokePath = Skia.Path.Make();
-    const fillPath = Skia.Path.Make();
-    const baseline = 60;
-    const phaseOffset = 1.1;
-    const freq = 3.0;
-    const speed = -3.0;
-
-    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
-    strokePath.moveTo(0, startY);
-    fillPath.moveTo(0, startY);
-
+    const baseline = 100;
+    const phaseOffset = 4.8;
+    const freq = 2.8;
+    const speed = -2.5;
+    strokePath.moveTo(0, baseline);
+    const amplitude = 0.8 + renderAmp.value * 0.55;
     for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const envelope = Math.sin((x / screenWidth) * Math.PI);
       const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
-      const y = baseline + renderAmp.value * Math.sin(angle);
+      const y = baseline - amplitude * Math.cos(angle) * envelope;
       strokePath.lineTo(x, y);
-      fillPath.lineTo(x, y);
     }
-    fillPath.lineTo(screenWidth, 120);
-    fillPath.lineTo(0, 120);
-    fillPath.close();
-
-    return { stroke: strokePath, fill: fillPath };
+    return strokePath;
   });
-
-  const wave1Fill = useDerivedValue(() => wave1.value.fill);
-  const wave1Stroke = useDerivedValue(() => wave1.value.stroke);
-  const wave2Fill = useDerivedValue(() => wave2.value.fill);
-  const wave2Stroke = useDerivedValue(() => wave2.value.stroke);
-  const wave3Fill = useDerivedValue(() => wave3.value.fill);
-  const wave3Stroke = useDerivedValue(() => wave3.value.stroke);
-  const wave4Fill = useDerivedValue(() => wave4.value.fill);
-  const wave4Stroke = useDerivedValue(() => wave4.value.stroke);
 
   // ── Request Microphone Permission ──────────────────────────────────────────
   const requestMicPermission = useCallback(async () => {
@@ -1012,6 +1029,7 @@ export default function App() {
       updatePttState('idle');
       setIsRecording(false);
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+      amplitudeRef.value = 0;
       
       // Since turnComplete is rejected by this experimental native audio model,
       // we force the server-side VAD to trigger by sending 1.5 seconds of perfect silence.
@@ -1039,11 +1057,14 @@ export default function App() {
       updatePttState('idle');
       setIsRecording(false);
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+      amplitudeRef.value = 0;
       return;
     }
 
     if (message.type === 'pcm_chunk') {
       sendPcmChunk(message.data);
+      const rms = getVolumeFromBase64Pcm(message.data);
+      amplitudeRef.value = Math.min(95, rms * 320);
     }
   }, [scaleAnim, sendPcmChunk, updatePttState]);
 
@@ -1309,46 +1330,30 @@ export default function App() {
       </View>
 
       {/* ── Persistent Skia Waveform Canvas ── */}
-      <Canvas style={{ width: '100%', height: 120, position: 'absolute', bottom: 0, left: 0 }}>
-        {/* Layer 4: #48cae4, opacity 0.15, strokeWidth 0.6 */}
-        <Path path={wave4Fill} style="fill">
-          <LinearGradient
-            start={vec(0, 0)}
-            end={vec(0, 120)}
-            colors={['rgba(72, 202, 228, 0.02)', 'rgba(72, 202, 228, 0)']}
-          />
+      <Canvas style={{ width: '100%', height: 200, position: 'absolute', bottom: 0, left: 0 }}>
+        {/* Wave 4 (Pink) */}
+        <Path path={wave4} style="stroke" strokeWidth={5} color="#ec4899" opacity={0.14}>
+          <BlurMask radius={8} style="normal" />
         </Path>
-        <Path path={wave4Stroke} style="stroke" strokeWidth={0.6} color="#48cae4" opacity={0.15} />
+        <Path path={wave4} style="stroke" strokeWidth={1.5} color="#ec4899" opacity={0.35} />
 
-        {/* Layer 3: #48cae4, opacity 0.3, strokeWidth 0.8 */}
-        <Path path={wave3Fill} style="fill">
-          <LinearGradient
-            start={vec(0, 0)}
-            end={vec(0, 120)}
-            colors={['rgba(72, 202, 228, 0.05)', 'rgba(72, 202, 228, 0)']}
-          />
+        {/* Wave 3 (Blue) */}
+        <Path path={wave3} style="stroke" strokeWidth={6} color="#3b82f6" opacity={0.22}>
+          <BlurMask radius={8} style="normal" />
         </Path>
-        <Path path={wave3Stroke} style="stroke" strokeWidth={0.8} color="#48cae4" opacity={0.3} />
+        <Path path={wave3} style="stroke" strokeWidth={1.8} color="#3b82f6" opacity={0.55} />
 
-        {/* Layer 2: #48cae4, opacity 0.6, strokeWidth 1.2 */}
-        <Path path={wave2Fill} style="fill">
-          <LinearGradient
-            start={vec(0, 0)}
-            end={vec(0, 120)}
-            colors={['rgba(72, 202, 228, 0.10)', 'rgba(72, 202, 228, 0)']}
-          />
+        {/* Wave 2 (Purple) */}
+        <Path path={wave2} style="stroke" strokeWidth={7} color="#a855f7" opacity={0.30}>
+          <BlurMask radius={8} style="normal" />
         </Path>
-        <Path path={wave2Stroke} style="stroke" strokeWidth={1.2} color="#48cae4" opacity={0.6} />
+        <Path path={wave2} style="stroke" strokeWidth={2.0} color="#a855f7" opacity={0.75} />
 
-        {/* Layer 1: #48cae4, opacity 1, strokeWidth 2 */}
-        <Path path={wave1Fill} style="fill">
-          <LinearGradient
-            start={vec(0, 0)}
-            end={vec(0, 120)}
-            colors={['rgba(72, 202, 228, 0.15)', 'rgba(72, 202, 228, 0)']}
-          />
+        {/* Wave 1 (Cyan) */}
+        <Path path={wave1} style="stroke" strokeWidth={8} color="#48cae4" opacity={0.38}>
+          <BlurMask radius={8} style="normal" />
         </Path>
-        <Path path={wave1Stroke} style="stroke" strokeWidth={2} color="#48cae4" opacity={1} />
+        <Path path={wave1} style="stroke" strokeWidth={2.5} color="#48cae4" opacity={0.95} />
       </Canvas>
 
       {/* ── Camera Floating Action Button ── */}
