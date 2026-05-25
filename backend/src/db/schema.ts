@@ -34,6 +34,7 @@ export const orders = sqliteTable('orders', {
     .references(() => products.id),
   amount: integer('amount').notNull(),
   status: text('status').notNull().default('pending'),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const marketInsights = sqliteTable('market_insights', {

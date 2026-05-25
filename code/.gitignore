@@ -1,0 +1,9 @@
+# Ignore all files by default
+*
+
+# Allow these specific files
+!parser.py
+!poster.py
+!try.py
+!.gitignore
+!README.md
