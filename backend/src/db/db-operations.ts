@@ -518,3 +518,59 @@ export async function updateProductStock(
   }
 }
 
+/**
+ * Creates a new artisan profile during the onboarding flow.
+ * Generates a shop slug from the name, and uses placeholder values for phone and UIN.
+ *
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param name The name of the artisan
+ * @param village The village/region of the artisan
+ * @param craftType The type of craft the artisan practices
+ * @param experienceYears The number of years of experience (as text)
+ */
+export async function createArtisanProfile(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  name: string,
+  village: string,
+  craftType: string,
+  experienceYears: string
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    // Generate a URL-friendly shop slug from the name
+    const shopSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+
+    const result = await drizzleDb
+      .insert(schema.artisans)
+      .values({
+        name,
+        region: village,
+        shopSlug,
+        phone: `onboarding_${Date.now()}`,
+        uinNumber: 'PENDING',
+        craftType,
+        experienceYears,
+      })
+      .returning();
+
+    if (!result || result.length === 0) {
+      throw new Error('Failed to create artisan profile: No database records were returned.');
+    }
+
+    return {
+      success: true,
+      artisan: result[0],
+    };
+  } catch (error: any) {
+    console.error('Error in createArtisanProfile:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

@@ -483,12 +483,29 @@ export default function App() {
     // Force binary messages to arrive as ArrayBuffer, not Blob
     ws.binaryType = 'arraybuffer';
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       console.log(`[WS:${attemptId}] Connected. State:`, getWsReadyStateLabel(ws));
       setWsStatus(WS_STATUS.CONNECTED);
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
+      }
+
+      // Send init message with language preference and artisan ID
+      try {
+        const savedLang = await AsyncStorage.getItem('user_language') || 'english';
+        const savedArtisanId = await AsyncStorage.getItem('artisan_id') || `guest_${Date.now()}`;
+        const initPayload = {
+          type: 'init',
+          language: savedLang,
+          artisanId: savedArtisanId,
+        };
+        console.log('[WS] Sending init:', JSON.stringify(initPayload));
+        ws.send(JSON.stringify(initPayload));
+      } catch (err) {
+        console.warn('[WS] Failed to send init message:', err);
+        // Fallback: send with defaults
+        ws.send(JSON.stringify({ type: 'init', language: 'english', artisanId: `guest_${Date.now()}` }));
       }
     };
 
@@ -522,6 +539,19 @@ export default function App() {
         if (response.serverContent?.interrupted) {
           console.log('[GEMINI] Interrupted by user voice! Stopping playback.');
           recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop_playback' }));
+        }
+
+        // Handle artisan_created event from backend onboarding
+        if (response.type === 'artisan_created' && response.artisanId) {
+          console.log('[ONBOARDING] Artisan profile created! ID:', response.artisanId, 'Shop:', response.shopSlug);
+          try {
+            await AsyncStorage.setItem('artisan_id', response.artisanId);
+            if (response.shopSlug) {
+              await AsyncStorage.setItem('shop_slug', response.shopSlug);
+            }
+          } catch (storageErr) {
+            console.warn('[ONBOARDING] Failed to save artisan ID:', storageErr);
+          }
         }
 
         // Drill down to locate Gemini's audio output blocks

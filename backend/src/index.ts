@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile } from './db/db-operations'
 import { artisans } from './db/schema'
 import { runTestFlow } from './db/test-db'
 
@@ -108,13 +108,48 @@ app.get('/ws', async (c) => {
   const geminiWs = new WebSocket(geminiUrl)
 
   let geminiReady = false
+  let geminiSetupSent = false
+  let sessionLanguage = 'english'
+  let sessionArtisanId = ''
   const clientMessageQueue: string[] = []
 
-  geminiWs.addEventListener('open', () => {
-    console.log(`[WS:${requestId}] Connected to Gemini Live API`)
-    
-    // Send initial setup payload
-    const setupPayload = {
+  // ── Language-aware system prompt builder ──────────────────────────────────
+  function buildSystemPrompt(language: string, isNewUser: boolean): string {
+    const langMap: Record<string, { name: string; greeting: string }> = {
+      kannada:  { name: 'Kannada', greeting: 'ನಮಸ್ಕಾರ' },
+      hindi:    { name: 'Hindi',   greeting: 'नमस्ते' },
+      english:  { name: 'English', greeting: 'Hello' },
+    }
+    const lang = langMap[language.toLowerCase()] || langMap.english
+
+    let prompt = `You are Sakhi (सखी / ಸಖಿ), a warm and empathetic AI business companion for rural Indian artisans. `
+    prompt += `You MUST speak ONLY in ${lang.name}. Every single word of your response must be in ${lang.name}. `
+    prompt += `Never switch to another language unless the user explicitly asks you to. `
+    prompt += `Be conversational, supportive, and encouraging — like a trusted friend who understands small business.\n\n`
+
+    if (isNewUser) {
+      prompt += `IMPORTANT: This is a NEW user who has not set up their profile yet. `
+      prompt += `You must run a structured onboarding conversation. `
+      prompt += `Start by greeting them warmly ("${lang.greeting}!") and explain that you will help them set up their shop.\n\n`
+      prompt += `Ask these questions ONE AT A TIME, waiting for the user's answer before moving to the next:\n`
+      prompt += `1. Ask for her name\n`
+      prompt += `2. Ask for her village or district\n`
+      prompt += `3. Ask what she makes (her craft type — e.g., pottery, weaving, embroidery)\n`
+      prompt += `4. Ask how long she has been making it (experience in years)\n\n`
+      prompt += `After collecting ALL FOUR answers, confirm the details back to her in ${lang.name} and say "Your shop is being set up!" `
+      prompt += `Then immediately call the "create_artisan_profile" tool with the collected data.\n\n`
+      prompt += `Do NOT skip any question. Do NOT ask multiple questions at once.\n`
+    } else {
+      prompt += `This user already has a profile. Help them manage their business — `
+      prompt += `adding products, updating stock, checking orders, or answering business questions.\n`
+    }
+
+    return prompt
+  }
+
+  // ── Build the Gemini setup payload ────────────────────────────────────────
+  function buildSetupPayload(language: string, isNewUser: boolean) {
+    return {
       setup: {
         model: 'models/gemini-2.5-flash-native-audio-latest',
         generationConfig: {
@@ -123,7 +158,7 @@ app.get('/ws', async (c) => {
         systemInstruction: {
           parts: [
             {
-              text: 'You are Kala-Mitra, an empathetic business companion for a rural artisan. Speak in English and Kannada.'
+              text: buildSystemPrompt(language, isNewUser)
             }
           ]
         },
@@ -165,24 +200,96 @@ app.get('/ws', async (c) => {
                   },
                   required: ['name', 'additional_stock']
                 }
+              },
+              {
+                name: 'create_artisan_profile',
+                description: 'Create a new artisan profile after onboarding. Called after collecting name, village, craft type, and experience.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {
+                    name: {
+                      type: 'STRING',
+                      description: 'The full name of the artisan.'
+                    },
+                    village: {
+                      type: 'STRING',
+                      description: 'The village or district where the artisan lives.'
+                    },
+                    craft_type: {
+                      type: 'STRING',
+                      description: 'The type of craft the artisan makes (e.g., pottery, weaving, embroidery).'
+                    },
+                    experience_years: {
+                      type: 'STRING',
+                      description: 'How long the artisan has been practicing their craft (e.g., "5 years", "10 years").'
+                    }
+                  },
+                  required: ['name', 'village', 'craft_type', 'experience_years']
+                }
               }
             ]
           }
         ]
       }
     }
-    
-    geminiWs.send(JSON.stringify(setupPayload))
+  }
+
+  geminiWs.addEventListener('open', () => {
+    console.log(`[WS:${requestId}] Connected to Gemini Live API`)
     geminiReady = true
 
-    // Flush any messages queued while waiting for Gemini to open
-    while (clientMessageQueue.length > 0) {
-      const msg = clientMessageQueue.shift()
-      if (msg !== undefined) {
-        geminiWs.send(msg)
+    // If we already received the init message before Gemini opened, send setup now
+    if (geminiSetupSent) {
+      console.log(`[WS:${requestId}] Gemini opened after init received — flushing queue`)
+      while (clientMessageQueue.length > 0) {
+        const msg = clientMessageQueue.shift()
+        if (msg !== undefined) {
+          geminiWs.send(msg)
+        }
       }
     }
+    // Otherwise, we wait for the client's init message to arrive
   })
+
+  // ── Send setup to Gemini once we know the language ─────────────────────
+  async function sendGeminiSetup(language: string, artisanId: string) {
+    // Check if this artisan already exists in the DB
+    let isNewUser = true
+    try {
+      if (artisanId && !artisanId.startsWith('guest_')) {
+        const drizzleDb = getDrizzle(c.env.DB)
+        const existing = await drizzleDb.select().from(artisans).limit(1)
+        if (existing.length > 0) {
+          isNewUser = false
+        }
+      }
+    } catch (err) {
+      console.warn(`[WS:${requestId}] Could not check artisan existence:`, err)
+    }
+
+    console.log(`[WS:${requestId}] Building setup. language=${language}, isNewUser=${isNewUser}, artisanId=${artisanId}`)
+    const setupPayload = buildSetupPayload(language, isNewUser)
+
+    if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+      geminiWs.send(JSON.stringify(setupPayload))
+      console.log(`[WS:${requestId}] Gemini setup sent with language=${language}`)
+    } else {
+      // Gemini hasn't connected yet — queue the setup as the first message
+      clientMessageQueue.unshift(JSON.stringify(setupPayload))
+      console.log(`[WS:${requestId}] Gemini not ready yet — setup queued`)
+    }
+    geminiSetupSent = true
+
+    // Flush any audio messages that were queued while waiting
+    if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+      while (clientMessageQueue.length > 0) {
+        const msg = clientMessageQueue.shift()
+        if (msg !== undefined) {
+          geminiWs.send(msg)
+        }
+      }
+    }
+  }
 
   // Listen for messages from the client and forward them to Gemini
   server.addEventListener('message', async (event: MessageEvent) => {
@@ -204,13 +311,27 @@ app.get('/ws', async (c) => {
         return // Drop invalid messages to prevent crashing
       }
 
+      // ── Handle init message from client ──────────────────────────────
+      if (payload.type === 'init') {
+        sessionLanguage = payload.language || 'english'
+        sessionArtisanId = payload.artisanId || ''
+        console.log(`[WS:${requestId}] Init received. language=${sessionLanguage}, artisanId=${sessionArtisanId}`)
+        await sendGeminiSetup(sessionLanguage, sessionArtisanId)
+        return
+      }
+
+      // ── Don't forward anything until setup is sent ───────────────────
+      if (!geminiSetupSent) {
+        console.warn(`[WS:${requestId}] Message received before init — queueing`)
+        clientMessageQueue.push(dataStr)
+        return
+      }
+
       if (payload.realtimeInput?.mediaChunks) {
         const firstChunk = payload.realtimeInput.mediaChunks[0]
-        console.log(`[WS:${requestId}] Passing through realtimeInput. media_type=${firstChunk?.mimeType || 'missing'}, base64Kb=${((firstChunk?.data?.length || 0) / 1024).toFixed(1)}`)
         if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
           geminiWs.send(dataStr)
         } else {
-          console.warn(`[WS:${requestId}] Gemini not ready. Queueing realtimeInput. geminiReady=${geminiReady}, readyState=${geminiWs.readyState}`)
           clientMessageQueue.push(dataStr)
         }
         return
@@ -218,9 +339,6 @@ app.get('/ws', async (c) => {
 
       // Intercept the client's custom audio event
       if (payload.event === 'user_audio' && payload.data) {
-        console.log(`[WS:${requestId}] Received user audio. media_type=${payload.media_type || payload.mime_type || 'missing'}, base64Kb=${(payload.data.length / 1024).toFixed(1)}`)
-
-        // Send directly to the Live API session
         const realtimeInput = {
           realtimeInput: {
             mediaChunks: [
@@ -234,13 +352,11 @@ app.get('/ws', async (c) => {
 
         const msgToSend = JSON.stringify(realtimeInput)
         if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
-          console.log(`[WS:${requestId}] Forwarding audio to Gemini`)
           geminiWs.send(msgToSend)
         } else {
-          console.warn(`[WS:${requestId}] Gemini not ready. Queueing audio. geminiReady=${geminiReady}, readyState=${geminiWs.readyState}`)
           clientMessageQueue.push(msgToSend)
         }
-        return // Always return — don't fall back to forwarding raw event
+        return
       }
 
       // Fallback: forward non-audio messages directly
@@ -392,6 +508,62 @@ app.get('/ws', async (c) => {
                     {
                       id: id,
                       name: 'update_stock',
+                      response: {
+                        output: {
+                          success,
+                          message
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+              geminiWs.send(JSON.stringify(responsePayload))
+            }
+            return // Intercept: do not forward this toolCall to client
+          }
+
+          const createProfileCalls = functionCalls.filter(call => call.name === 'create_artisan_profile')
+          if (createProfileCalls.length > 0) {
+            for (const call of createProfileCalls) {
+              const { id, args } = call
+              const name = args?.name
+              const village = args?.village
+              const craftType = args?.craft_type
+              const experienceYears = args?.experience_years
+              
+              let message = ''
+              let success = false
+              
+              try {
+                const result = await createArtisanProfile(c.env.DB, name, village, craftType, experienceYears)
+                
+                if (result.success) {
+                  success = true
+                  message = `Artisan profile for '${name}' created successfully! Shop slug: ${result.artisan?.shopSlug}`
+                  console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${result.artisan?.id}, Shop = ${result.artisan?.shopSlug}`)
+                  
+                  // Send the new artisan ID back to the client so they can store it
+                  server.send(JSON.stringify({
+                    type: 'artisan_created',
+                    artisanId: result.artisan?.id,
+                    shopSlug: result.artisan?.shopSlug,
+                  }))
+                } else {
+                  message = `Failed to create artisan profile: ${result.error}`
+                  console.error(`[WS:${requestId}] ONBOARDING FAILED: ${result.error}`)
+                }
+              } catch (dbErr: any) {
+                message = `Database transaction error: ${dbErr.message}`
+                console.error(`[WS:${requestId}] Database error during onboarding:`, dbErr)
+              }
+              
+              const responsePayload = {
+                toolResponse: {
+                  functionResponses: [
+                    {
+                      id: id,
+                      name: 'create_artisan_profile',
                       response: {
                         output: {
                           success,
