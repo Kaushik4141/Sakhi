@@ -902,6 +902,18 @@ export default function App() {
     })();
   }, []);
 
+  // ── Gemini Live Session Wrapper ──────────────────────────────────────────
+  const geminiLiveSession = useRef({
+    connect: () => {
+      connectWebSocket();
+    },
+    disconnect: () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    }
+  }).current;
+
   // ── On Mount: Permissions + WebSocket ─────────────────────────────────────
   useEffect(() => {
     if (!hasSelectedLanguage) return;

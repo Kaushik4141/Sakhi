@@ -525,6 +525,7 @@ export async function updateProductStock(
 }
 
 /**
+/**
  * Creates a new artisan profile during the onboarding flow.
  * Generates a shop slug from the name, and uses placeholder values for phone and UIN.
  *
@@ -628,6 +629,48 @@ export async function createProductListing(
     };
   } catch (error: any) {
     console.error('Error in createProductListing:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Inserts a new market research synthesis row into the SQLite `market_insights` table in D1.
+ */
+export async function insertMarketInsight(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  artisanId: string,
+  rawTavilyData: any,
+  structuredJson: any,
+  kannadaDigest: string,
+  roadmapKannada: string
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    const result = await drizzleDb
+      .insert(schema.marketInsights)
+      .values({
+        artisanId,
+        rawTavilyData: typeof rawTavilyData === 'string' ? rawTavilyData : JSON.stringify(rawTavilyData),
+        structuredJson: typeof structuredJson === 'string' ? structuredJson : JSON.stringify(structuredJson),
+        kannadaDigest,
+        roadmapKannada,
+      })
+      .returning();
+
+    if (!result || result.length === 0) {
+      throw new Error('Failed to insert market insight: No SQLite records returned.');
+    }
+
+    return {
+      success: true,
+      insight: result[0],
+    };
+  } catch (error: any) {
+    console.error('Error in insertMarketInsight:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),

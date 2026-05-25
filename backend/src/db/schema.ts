@@ -35,3 +35,13 @@ export const orders = sqliteTable('orders', {
   amount: integer('amount').notNull(),
   status: text('status').notNull().default('pending'),
 });
+
+export const marketInsights = sqliteTable('market_insights', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  artisanId: text('artisan_id').notNull(),
+  rawTavilyData: text('raw_tavily_data').notNull(), // stored as JSON string in SQLite
+  structuredJson: text('structured_json').notNull(), // stored as JSON string in SQLite
+  kannadaDigest: text('kannada_digest').notNull(),
+  roadmapKannada: text('roadmap_kannada').notNull(),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()).notNull(),
+});
