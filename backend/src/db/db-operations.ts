@@ -1,6 +1,7 @@
 import { drizzle, type DrizzleD1Database } from 'drizzle-orm/d1';
-import { eq, and, lt } from 'drizzle-orm';
+import { eq, and, lt, desc, gt, like } from 'drizzle-orm';
 import type { D1Database } from '@cloudflare/workers-types';
+import { Redis } from '@upstash/redis';
 import * as schema from './schema';
 
 /**
@@ -71,24 +72,72 @@ export async function insertProduct(
 export { insertProduct as createProduct };
 
 /**
- * Runs a query to calculate the total revenue from 'paid' orders for this artisan,
- * and finds any products where stock is less than 3.
+ * Instantly retrieves the business telemetry snapshot from Upstash Redis.
+ * Falls back to a default empty state if the key is null.
  * 
- * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param redisClient The Upstash Redis client instance
  * @param artisanId The ID of the artisan
- * @returns A compact snapshot JSON object containing the total revenue and low stock products
+ * @returns A compact snapshot JSON object containing the total revenue, top selling item, and low stock products
  */
 export async function getBusinessSnapshot(
+  redisClient: Redis,
+  artisanId: string
+) {
+  try {
+    const key = `telemetry:${artisanId}`;
+    const cached = await redisClient.get(key);
+
+    if (!cached) {
+      // Default empty state if the key is null
+      return {
+        success: true,
+        snapshot: {
+          artisanId,
+          totalRevenue: 0,
+          topSellingItem: 'None',
+          lowStockProducts: [],
+        },
+      };
+    }
+
+    // Upstash Redis may automatically parse the stringified JSON or return the raw string.
+    // We safely parse it if it is a string, otherwise return directly.
+    const snapshot = typeof cached === 'string' ? JSON.parse(cached) : cached;
+
+    return {
+      success: true,
+      snapshot,
+    };
+  } catch (error: any) {
+    console.error('Error in getBusinessSnapshot:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Synchronizes telemetry data (total revenue, top-selling product, and low-stock products) from D1 to Upstash Redis.
+ * Saves the JSON stringified telemetry snapshot to a key: telemetry:{artisanId} with a 1-hour expiration TTL.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param redisClient The Upstash Redis client instance
+ * @param artisanId The ID of the artisan to sync
+ */
+export async function syncTelemetryToRedis(
   db: D1Database | DrizzleD1Database<typeof schema>,
+  redisClient: Redis,
   artisanId: string
 ) {
   try {
     const drizzleDb = getDrizzle(db);
 
-    // 1. Query to retrieve all 'paid' orders for products owned by this artisan.
-    // We join the orders table with products to filter by artisanId and status.
+    // 1. Calculate total revenue and aggregate sales for top selling item from 'paid' orders
     const paidOrders = await drizzleDb
       .select({
+        productId: schema.orders.productId,
+        productName: schema.products.name,
         amount: schema.orders.amount,
         priceInr: schema.products.priceInr,
       })
@@ -101,14 +150,30 @@ export async function getBusinessSnapshot(
         )
       );
 
-    // Calculate total revenue.
-    // Note: Since amount in the orders table represents the quantity purchased,
-    // total revenue is calculated by summing (amount * priceInr) for each paid order.
     const totalRevenue = paidOrders.reduce((sum, order) => {
       return sum + (order.amount * order.priceInr);
     }, 0);
 
-    // 2. Query to retrieve products where stock is less than 3 for this artisan.
+    // Aggregate sales quantities per product to find the top selling item
+    const productSales: Record<string, { name: string; quantity: number }> = {};
+    paidOrders.forEach((order) => {
+      if (!productSales[order.productId]) {
+        productSales[order.productId] = { name: order.productName, quantity: 0 };
+      }
+      productSales[order.productId].quantity += order.amount;
+    });
+
+    let topSellingItem = "None";
+    let maxQuantity = 0;
+
+    Object.values(productSales).forEach((sale) => {
+      if (sale.quantity > maxQuantity) {
+        maxQuantity = sale.quantity;
+        topSellingItem = sale.name;
+      }
+    });
+
+    // 2. Query products where stock is less than 3 for this artisan (low stock items)
     const lowStockProducts = await drizzleDb
       .select()
       .from(schema.products)
@@ -119,19 +184,337 @@ export async function getBusinessSnapshot(
         )
       );
 
+    const snapshot = {
+      artisanId,
+      totalRevenue,
+      topSellingItem,
+      lowStockProducts,
+    };
+
+    // 3. Save resulting JSON string to telemetry:{artisanId} key with a 1-hour TTL (3600 seconds)
+    const key = `telemetry:${artisanId}`;
+    await redisClient.set(key, JSON.stringify(snapshot), { ex: 3600 });
+
     return {
       success: true,
-      snapshot: {
-        artisanId,
-        totalRevenue,
-        lowStockProducts,
-      },
+      snapshot,
     };
   } catch (error: any) {
-    console.error('Error in getBusinessSnapshot:', error);
+    console.error('Error in syncTelemetryToRedis:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
+
+/**
+ * Processes payment for an order atomically inside a database transaction.
+ * Updates order status to 'paid' and decrements associated product stock by the order amount.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param orderId The ID of the order to process
+ * @returns Object indicating success status, updated product name, and remaining stock
+ */
+/**
+ * Handles e-commerce checkout flow securely inside an atomic D1 batch transaction.
+ * Verifies product stock, inserts a new 'paid' order, and decrements product stock.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param productId The ID of the product being purchased
+ * @param quantityBought The quantity being purchased
+ * @returns Object indicating success and updated remaining stock
+ */
+export async function processOrderPayment(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  productId: string,
+  quantityBought: number
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    // 1. Verify the product exists and has sufficient stock
+    const productResult = await drizzleDb
+      .select()
+      .from(schema.products)
+      .where(eq(schema.products.id, productId));
+
+    if (!productResult || productResult.length === 0) {
+      throw new Error(`Product with ID '${productId}' not found.`);
+    }
+
+    const product = productResult[0];
+
+    if (product.stock < quantityBought) {
+      throw new Error(
+        `Insufficient stock for product '${product.name}'. Requested: ${quantityBought}, Available: ${product.stock}`
+      );
+    }
+
+    const remainingStock = product.stock - quantityBought;
+
+    // 2. Perform atomic batch writes: insert 'paid' order and decrement stock
+    // Cloudflare D1 guarantees batch statements are executed in a single atomic SQL transaction.
+    const batchResult = await drizzleDb.batch([
+      drizzleDb
+        .insert(schema.orders)
+        .values({
+          productId: productId,
+          amount: quantityBought,
+          status: 'paid',
+        })
+        .returning(),
+      drizzleDb
+        .update(schema.products)
+        .set({ stock: remainingStock })
+        .where(eq(schema.products.id, productId))
+        .returning(),
+    ]);
+
+    const updatedProduct = batchResult[1];
+
+    if (!updatedProduct || updatedProduct.length === 0) {
+      throw new Error('Failed to update product stock.');
+    }
+
+    return {
+      success: true,
+      remainingStock: updatedProduct[0].stock,
+    };
+  } catch (error: any) {
+    console.error('Error in processOrderPayment:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Automatically ensures an artisan exists by phone number.
+ * If the artisan exists, returns their ID and shop slug.
+ * If not, generates a URL-friendly shop slug, hardcodes a mock UIN, and creates a new artisan.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param name The name of the artisan
+ * @param phone The unique phone number of the artisan
+ * @param region Optional region name (defaults to 'Demo Region' to satisfy notNull constraint)
+ */
+export async function ensureArtisanExists(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  name: string,
+  phone: string,
+  region: string = 'Demo Region'
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    // 1. Check if an artisan with this phone number already exists
+    const existing = await drizzleDb
+      .select()
+      .from(schema.artisans)
+      .where(eq(schema.artisans.phone, phone));
+
+    if (existing && existing.length > 0) {
+      return {
+        success: true,
+        id: existing[0].id,
+        shopSlug: existing[0].shopSlug,
+      };
+    }
+
+    // 2. Automatically generate a URL-friendly shop slug based on their name
+    const shopSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')  // replace spaces and special characters with hyphens
+      .replace(/(^-|-$)/g, '');    // trim leading and trailing hyphens
+
+    // 3. Insert new artisan with a mock UIN number
+    const result = await drizzleDb
+      .insert(schema.artisans)
+      .values({
+        name,
+        phone,
+        region,
+        shopSlug,
+        uinNumber: 'UIN-MOCK-2024', // mock UIN to bypass regulatory checks for the demo
+      })
+      .returning();
+
+    if (!result || result.length === 0) {
+      throw new Error('Failed to create new artisan: No records returned.');
+    }
+
+    return {
+      success: true,
+      id: result[0].id,
+      shopSlug: result[0].shopSlug,
+    };
+  } catch (error: any) {
+    console.error('Error in ensureArtisanExists:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Retrieves storefront data: artisan profile and all their associated products.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param artisanSlug The shop slug of the artisan
+ */
+export async function getStorefrontData(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  artisanSlug: string
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    // 1. Query the artisans table by shopSlug
+    const artisanResult = await drizzleDb
+      .select()
+      .from(schema.artisans)
+      .where(eq(schema.artisans.shopSlug, artisanSlug));
+
+    if (!artisanResult || artisanResult.length === 0) {
+      return {
+        success: false,
+        error: `Artisan with shop slug '${artisanSlug}' not found.`,
+      };
+    }
+
+    const artisan = artisanResult[0];
+
+    // 2. Query the products table for all items matching that artisanId
+    const productsResult = await drizzleDb
+      .select()
+      .from(schema.products)
+      .where(eq(schema.products.artisanId, artisan.id));
+
+    return {
+      success: true,
+      artisan,
+      products: productsResult,
+    };
+  } catch (error: any) {
+    console.error('Error in getStorefrontData:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Queries all products where stock is greater than 0, performing a SQL JOIN
+ * to include the artisan name, ordered newly created first (by primary key descending fallback).
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ */
+export async function getMarketplaceFeed(
+  db: D1Database | DrizzleD1Database<typeof schema>
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    const productsResult = await drizzleDb
+      .select({
+        id: schema.products.id,
+        name: schema.products.name,
+        priceInr: schema.products.priceInr,
+        stock: schema.products.stock,
+        imageUrl: schema.products.imageUrl,
+        artisanId: schema.products.artisanId,
+        artisanName: schema.artisans.name,
+      })
+      .from(schema.products)
+      .innerJoin(schema.artisans, eq(schema.products.artisanId, schema.artisans.id))
+      .where(gt(schema.products.stock, 0))
+      .orderBy(desc(schema.products.id));
+
+    return {
+      success: true,
+      products: productsResult,
+    };
+  } catch (error: any) {
+    console.error('Error in getMarketplaceFeed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Updates a product's stock by adding additionalStock to the current value.
+ * Performs a case-insensitive exact or LIKE match to find the product belonging to the artisan.
+ * 
+ * @param db The raw D1 Database binding or an initialized Drizzle DB instance
+ * @param artisanId The ID of the artisan owning the product
+ * @param productName The name of the product to match (case-insensitive exact or fuzzy)
+ * @param additionalStock The quantity to add to the current stock
+ */
+export async function updateProductStock(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  artisanId: string,
+  productName: string,
+  additionalStock: number
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    // 1. Query products belonging to the artisan matching the productName using LIKE
+    const products = await drizzleDb
+      .select()
+      .from(schema.products)
+      .where(
+        and(
+          eq(schema.products.artisanId, artisanId),
+          like(schema.products.name, `%${productName}%`)
+        )
+      );
+
+    if (!products || products.length === 0) {
+      throw new Error(`Product matching '${productName}' not found.`);
+    }
+
+    // Try to find an exact case-insensitive name match first
+    let product = products.find(
+      (p) => p.name.toLowerCase() === productName.toLowerCase()
+    );
+
+    // If no exact match is found, fallback to the first LIKE matched product
+    if (!product) {
+      product = products[0];
+    }
+
+    const newStock = product.stock + additionalStock;
+
+    // 2. Perform the update query
+    const result = await drizzleDb
+      .update(schema.products)
+      .set({ stock: newStock })
+      .where(eq(schema.products.id, product.id))
+      .returning();
+
+    if (!result || result.length === 0) {
+      throw new Error('Failed to update product stock.');
+    }
+
+    return {
+      success: true,
+      productName: product.name,
+      newStock: result[0].stock,
+    };
+  } catch (error: any) {
+    console.error('Error in updateProductStock:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+

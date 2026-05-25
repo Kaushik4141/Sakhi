@@ -5,6 +5,8 @@ export const artisans = sqliteTable('artisans', {
   name: text('name').notNull(),
   region: text('region').notNull(),
   shopSlug: text('shop_slug').notNull(),
+  phone: text('phone').notNull().unique(),
+  uinNumber: text('uin_number').notNull(),
 });
 
 export const products = sqliteTable('products', {
