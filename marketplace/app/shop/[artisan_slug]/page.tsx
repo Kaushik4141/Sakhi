@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import type { Metadata, ResolvingMetadata } from "next";
 import { getDb, schema } from "@/db";
 import CheckoutButton from "@/components/CheckoutButton";
 
@@ -16,6 +17,30 @@ const formatPrice = new Intl.NumberFormat("en-IN", {
   currency: "INR",
   maximumFractionDigits: 0,
 });
+
+export async function generateMetadata(
+  { params }: StorefrontPageProps,
+  parent: ResolvingMetadata
+): Promise<Metadata> {
+  const { artisan_slug } = await params;
+  const db = getDb();
+  
+  const artisan = await db.query.artisans.findFirst({
+    where: eq(schema.artisans.slug, artisan_slug),
+  });
+
+  if (!artisan) return { title: "Artisan Not Found" };
+
+  return {
+    title: `${artisan.name} | Authentic Indian Crafts`,
+    description: artisan.bio || `Shop authentic handcrafted products directly from ${artisan.name}.`,
+    openGraph: {
+      title: `${artisan.name} | Sakhi Marketplace`,
+      description: artisan.bio || `Shop authentic handcrafted products directly from ${artisan.name}.`,
+      type: "website",
+    },
+  };
+}
 
 export default async function StorefrontPage({ params }: StorefrontPageProps) {
   const { artisan_slug } = await params;
@@ -35,8 +60,23 @@ export default async function StorefrontPage({ params }: StorefrontPageProps) {
     orderBy: (products, { asc }) => [asc(products.name)],
   });
 
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "mainEntity": {
+      "@type": "Person",
+      "name": artisan.name,
+      "description": artisan.bio || "",
+      "url": `http://localhost:3000/shop/${artisan_slug}`
+    }
+  };
+
   return (
     <main className="min-h-screen bg-white">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       {/* ═══════════════════════════════════════════════════════════
           CINEMATIC HERO — Artisan Profile
           ═══════════════════════════════════════════════════════════ */}

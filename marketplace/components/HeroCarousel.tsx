@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 export default function HeroCarousel() {
   return (
     <div className="w-full bg-black py-4">
@@ -17,10 +19,13 @@ export default function HeroCarousel() {
             </button>
           </div>
           {/* Background Image */}
-          <img
+          <Image
             src="https://images.unsplash.com/photo-1513519245088-0e12902e5a38?q=80&w=2000&auto=format&fit=crop"
             alt="Artisan crafts banner"
-            className="w-full h-full object-cover opacity-60 object-right"
+            fill
+            priority
+            sizes="100vw"
+            className="object-cover opacity-60 object-right"
           />
         </div>
       </div>
