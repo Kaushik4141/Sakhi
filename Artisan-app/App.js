@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 // ─── WebSocket Config ──────────────────────────────────────────────────────────
 const WS_URL = 'ws://localhost:8787/ws';
@@ -212,16 +212,9 @@ export default function App() {
       return;
     }
 
-    // Infer MIME type from file extension
-    const ext = uri.split('.').pop()?.toLowerCase();
-    const mimeType = ext === 'wav' ? 'audio/wav' : 'audio/m4a';
-
     const payload = JSON.stringify({
-      type:         'audio_input',
-      artisan_id:   DUMMY_ARTISAN_ID,
-      audio_base64: base64Audio,
-      mime_type:    mimeType,
-      timestamp:    new Date().toISOString(),
+      event: 'user_audio',
+      data: base64Audio,
     });
 
     const ws = wsRef.current;
