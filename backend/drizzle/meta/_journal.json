@@ -22,6 +22,20 @@
       "when": 1779730310556,
       "tag": "0002_right_venus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1779731223888,
+      "tag": "0003_curvy_scream",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1779731238187,
+      "tag": "0004_curved_bromley",
+      "breakpoints": true
     }
   ]
 }

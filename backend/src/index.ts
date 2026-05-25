@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile, createProductListing } from './db/db-operations'
 import { artisans } from './db/schema'
 import { runTestFlow } from './db/test-db'
 
@@ -165,21 +165,29 @@ app.get('/ws', async (c) => {
           {
             functionDeclarations: [
               {
-                name: 'create_product',
-                description: 'Create a new product with the specified name and price.',
+                name: 'create_product_listing',
+                description: 'Create a new product listing when the artisan describes something she made and its price.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    name: {
+                    product_name_original: {
                       type: 'STRING',
-                      description: 'The name of the product.'
+                      description: 'The name of the product in the language she spoke.'
                     },
-                    price: {
+                    price_inr: {
                       type: 'INTEGER',
-                      description: 'The price of the product.'
+                      description: 'The price of the product in rupees.'
+                    },
+                    material: {
+                      type: 'STRING',
+                      description: 'The material used (e.g. silk, cotton, clay), if mentioned.'
+                    },
+                    color: {
+                      type: 'STRING',
+                      description: 'The color of the product, if mentioned.'
                     }
                   },
-                  required: ['name', 'price']
+                  required: ['product_name_original', 'price_inr']
                 }
               },
               {
@@ -231,6 +239,25 @@ app.get('/ws', async (c) => {
         ]
       }
     }
+  }
+
+  // ── Helper for calling Gemini REST API ──────────────────────────────────────
+  async function generateGeminiContent(prompt: string, apiKey: string): Promise<string> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[REST API] Gemini generateContent failed:', errorText);
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+    const data = await response.json() as any;
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   }
 
   geminiWs.addEventListener('open', () => {
@@ -574,6 +601,80 @@ app.get('/ws', async (c) => {
                           success,
                           message: toolMessage,
                           shop_url: success ? `https://kalamitra.in/shop/${shopSlug}` : undefined
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+              geminiWs.send(JSON.stringify(responsePayload))
+            }
+            return // Intercept: do not forward this toolCall to client
+          }
+
+          const createProductListingCalls = functionCalls.filter(call => call.name === 'create_product_listing')
+          if (createProductListingCalls.length > 0) {
+            for (const call of createProductListingCalls) {
+              const { id, args } = call
+              const originalName = args?.product_name_original
+              const price = args?.price_inr
+              const material = args?.material
+              const color = args?.color
+              
+              let toolMessage = ''
+              let success = false
+              
+              try {
+                // 1. Translate product name to English
+                const translatePrompt = `Translate this Indian handicraft product name to English, keeping it natural but descriptive. Just return the translated name, nothing else: "${originalName}"`
+                const titleEn = await generateGeminiContent(translatePrompt, c.env.GEMINI_API_KEY)
+                
+                // 2. Generate 100-word SEO description
+                const details = [
+                  `Name: ${titleEn}`,
+                  material ? `Material: ${material}` : '',
+                  color ? `Color: ${color}` : '',
+                  `Price: ₹${price}`
+                ].filter(Boolean).join(', ')
+                
+                const seoPrompt = `Write a 100-word product description for an Indian handcraft marketplace for: [${details}]. Focus on authenticity, craftsmanship, and heritage. Do not include introductory phrases, just the description.`
+                const descriptionSeo = await generateGeminiContent(seoPrompt, c.env.GEMINI_API_KEY)
+                
+                // 3. Insert into database
+                // Note: The createProductListing function must exist in db-operations.ts
+                const result = await createProductListing(
+                  c.env.DB,
+                  sessionArtisanId, // We get this from the init message earlier
+                  originalName,
+                  titleEn,
+                  descriptionSeo,
+                  price
+                )
+                
+                if (result.success) {
+                  success = true
+                  const shopUrl = `https://kalamitra.in/shop/${result.shopSlug}#${result.product?.id}`
+                  toolMessage = `Product listed successfully! Storefront URL: ${shopUrl}`
+                  console.log(`[WS:${requestId}] PRODUCT LISTED: ${titleEn} for ₹${price}`)
+                } else {
+                  toolMessage = `Failed to list product: ${result.error}`
+                  console.error(`[WS:${requestId}] LISTING FAILED: ${result.error}`)
+                }
+              } catch (err: any) {
+                toolMessage = `Error processing listing: ${err.message}`
+                console.error(`[WS:${requestId}] Error processing product listing:`, err)
+              }
+              
+              const responsePayload = {
+                toolResponse: {
+                  functionResponses: [
+                    {
+                      id: id,
+                      name: 'create_product_listing',
+                      response: {
+                        output: {
+                          success,
+                          message: toolMessage
                         }
                       }
                     }

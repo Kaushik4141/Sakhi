@@ -44,7 +44,8 @@ export async function insertProduct(
       .insert(schema.products)
       .values({
         artisanId,
-        name,
+        titleOriginal: name,
+        titleEn: name,
         priceInr: price,
         stock,
         imageUrl,
@@ -137,7 +138,7 @@ export async function syncTelemetryToRedis(
     const paidOrders = await drizzleDb
       .select({
         productId: schema.orders.productId,
-        productName: schema.products.name,
+        productName: schema.products.titleEn,
         amount: schema.orders.amount,
         priceInr: schema.products.priceInr,
       })
@@ -247,7 +248,7 @@ export async function processOrderPayment(
 
     if (product.stock < quantityBought) {
       throw new Error(
-        `Insufficient stock for product '${product.name}'. Requested: ${quantityBought}, Available: ${product.stock}`
+        `Insufficient stock for product '${product.titleEn}'. Requested: ${quantityBought}, Available: ${product.stock}`
       );
     }
 
@@ -423,7 +424,7 @@ export async function getMarketplaceFeed(
     const productsResult = await drizzleDb
       .select({
         id: schema.products.id,
-        name: schema.products.name,
+        name: schema.products.titleEn,
         priceInr: schema.products.priceInr,
         stock: schema.products.stock,
         imageUrl: schema.products.imageUrl,
@@ -473,7 +474,7 @@ export async function updateProductStock(
       .where(
         and(
           eq(schema.products.artisanId, artisanId),
-          like(schema.products.name, `%${productName}%`)
+          like(schema.products.titleEn, `%${productName}%`)
         )
       );
 
@@ -483,7 +484,7 @@ export async function updateProductStock(
 
     // Try to find an exact case-insensitive name match first
     let product = products.find(
-      (p) => p.name.toLowerCase() === productName.toLowerCase()
+      (p) => p.titleEn.toLowerCase() === productName.toLowerCase()
     );
 
     // If no exact match is found, fallback to the first LIKE matched product
@@ -506,7 +507,7 @@ export async function updateProductStock(
 
     return {
       success: true,
-      productName: product.name,
+      productName: product.titleEn,
       newStock: result[0].stock,
     };
   } catch (error: any) {
@@ -569,6 +570,59 @@ export async function createArtisanProfile(
     };
   } catch (error: any) {
     console.error('Error in createArtisanProfile:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Creates a new product listing.
+ */
+export async function createProductListing(
+  db: D1Database | DrizzleD1Database<typeof schema>,
+  artisanId: string,
+  titleOriginal: string,
+  titleEn: string,
+  descriptionSeo: string,
+  priceInr: number
+) {
+  try {
+    const drizzleDb = getDrizzle(db);
+
+    const result = await drizzleDb
+      .insert(schema.products)
+      .values({
+        artisanId,
+        titleOriginal,
+        titleEn,
+        descriptionSeo,
+        priceInr,
+        stock: 0,
+        imageUrl: '',
+      })
+      .returning();
+
+    if (!result || result.length === 0) {
+      throw new Error('Failed to create product listing: No database records were returned.');
+    }
+
+    // Fetch the shopSlug to construct the URL
+    const artisanResult = await drizzleDb
+      .select({ shopSlug: schema.artisans.shopSlug })
+      .from(schema.artisans)
+      .where(eq(schema.artisans.id, artisanId));
+
+    const shopSlug = artisanResult.length > 0 ? artisanResult[0].shopSlug : 'unknown-shop';
+
+    return {
+      success: true,
+      product: result[0],
+      shopSlug,
+    };
+  } catch (error: any) {
+    console.error('Error in createProductListing:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),

@@ -11,17 +11,22 @@ export const artisans = sqliteTable('artisans', {
   experienceYears: text('experience_years'),
 });
 
+import { sql } from 'drizzle-orm';
+
 export const products = sqliteTable('products', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
   artisanId: text('artisan_id')
     .notNull()
     .references(() => artisans.id),
-  name: text('name').notNull(),
+  titleOriginal: text('title_original').notNull(),
+  titleEn: text('title_en').notNull(),
+  descriptionSeo: text('description_seo'),
   priceInr: integer('price_inr').notNull(),
   stock: integer('stock').notNull(),
   imageUrl: text('image_url').notNull(),
+  isLive: integer('is_live', { mode: 'boolean' }).default(true),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
-
 export const orders = sqliteTable('orders', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
   productId: text('product_id')
