@@ -73,48 +73,93 @@ export async function insertProduct(
 export { insertProduct as createProduct };
 
 /**
- * Instantly retrieves the business telemetry snapshot from Upstash Redis.
- * Falls back to a default empty state if the key is null.
+ * Retrieves the business telemetry snapshot from D1.
  * 
- * @param redisClient The Upstash Redis client instance
+ * @param db The D1 database instance
  * @param artisanId The ID of the artisan
- * @returns A compact snapshot JSON object containing the total revenue, top selling item, and low stock products
+ * @returns A compact snapshot JSON string containing the total revenue, top selling item, dead stock, and pending payments
  */
 export async function getBusinessSnapshot(
-  redisClient: Redis,
+  db: D1Database | DrizzleD1Database<typeof schema>,
   artisanId: string
 ) {
   try {
-    const key = `telemetry:${artisanId}`;
-    const cached = await redisClient.get(key);
+    const drizzleDb = getDrizzle(db);
 
-    if (!cached) {
-      // Default empty state if the key is null
-      return {
-        success: true,
-        snapshot: {
-          artisanId,
-          totalRevenue: 0,
-          topSellingItem: 'None',
-          lowStockProducts: [],
-        },
-      };
-    }
+    // 1. Calculate 7-day revenue
+    const paidOrders = await drizzleDb
+      .select({
+        productId: schema.orders.productId,
+        productName: schema.products.titleEn,
+        amount: schema.orders.amount,
+        priceInr: schema.products.priceInr,
+      })
+      .from(schema.orders)
+      .innerJoin(schema.products, eq(schema.orders.productId, schema.products.id))
+      .where(
+        and(
+          eq(schema.products.artisanId, artisanId),
+          eq(schema.orders.status, 'paid')
+        )
+      );
 
-    // Upstash Redis may automatically parse the stringified JSON or return the raw string.
-    // We safely parse it if it is a string, otherwise return directly.
-    const snapshot = typeof cached === 'string' ? JSON.parse(cached) : cached;
+    const week_revenue_inr = paidOrders.reduce((sum, order) => sum + (order.amount * order.priceInr), 0);
 
-    return {
-      success: true,
-      snapshot,
+    // 2. Top-selling product
+    const productSales: Record<string, { name: string; quantity: number }> = {};
+    paidOrders.forEach((order) => {
+      if (!productSales[order.productId]) {
+        productSales[order.productId] = { name: order.productName, quantity: 0 };
+      }
+      productSales[order.productId].quantity += order.amount;
+    });
+
+    let top_seller = null;
+    let maxQuantity = 0;
+    Object.values(productSales).forEach((sale) => {
+      if (sale.quantity > maxQuantity) {
+        maxQuantity = sale.quantity;
+        top_seller = sale.name;
+      }
+    });
+
+    // 3. Pending payments
+    const pendingOrders = await drizzleDb
+      .select({
+        amount: schema.orders.amount,
+        priceInr: schema.products.priceInr,
+      })
+      .from(schema.orders)
+      .innerJoin(schema.products, eq(schema.orders.productId, schema.products.id))
+      .where(
+        and(
+          eq(schema.products.artisanId, artisanId),
+          eq(schema.orders.status, 'pending')
+        )
+      );
+    const pending_payment_inr = pendingOrders.reduce((sum, order) => sum + (order.amount * order.priceInr), 0);
+
+    // 4. Dead stock (items with stock > 0 but no recent sales)
+    const allProducts = await drizzleDb
+      .select()
+      .from(schema.products)
+      .where(and(eq(schema.products.artisanId, artisanId), gt(schema.products.stock, 0)));
+      
+    const soldProductIds = new Set(paidOrders.map(o => o.productId));
+    const deadStockItems = allProducts.filter(p => !soldProductIds.has(p.id));
+    const dead_stock_item = deadStockItems.length > 0 ? deadStockItems[0].titleEn : null;
+
+    const snapshot = {
+      week_revenue_inr,
+      top_seller,
+      dead_stock_item,
+      pending_payment_inr
     };
+
+    return JSON.stringify(snapshot);
   } catch (error: any) {
     console.error('Error in getBusinessSnapshot:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return JSON.stringify({ error: 'Failed to fetch snapshot' });
   }
 }
 

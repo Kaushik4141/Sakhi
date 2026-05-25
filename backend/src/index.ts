@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile, createProductListing, insertMarketInsight } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile, createProductListing, insertMarketInsight, getBusinessSnapshot } from './db/db-operations'
 import { artisans } from './db/schema'
+import { eq } from 'drizzle-orm'
 import { runTestFlow } from './db/test-db'
 
 type Bindings = {
@@ -140,11 +141,15 @@ app.get('/ws', async (c) => {
   const clientMessageQueue: string[] = []
 
   // ── Language-aware system prompt builder ──────────────────────────────────
-  function buildSystemPrompt(language: string, isNewUser: boolean): string {
+  function buildSystemPrompt(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any): string {
     const langMap: Record<string, { name: string; greeting: string }> = {
       kannada:  { name: 'Kannada', greeting: 'ನಮಸ್ಕಾರ' },
       hindi:    { name: 'Hindi',   greeting: 'नमस्ते' },
       english:  { name: 'English', greeting: 'Hello' },
+      kn:       { name: 'Kannada', greeting: 'ನಮಸ್ಕಾರ' },
+      hi:       { name: 'Hindi',   greeting: 'नमस्ते' },
+      en:       { name: 'English', greeting: 'Hello' },
+      es:       { name: 'Spanish', greeting: 'Hola' },
     }
     const lang = langMap[language.toLowerCase()] || langMap.english
 
@@ -165,26 +170,40 @@ app.get('/ws', async (c) => {
       prompt += `After collecting ALL FOUR answers, confirm the details back to her in ${lang.name} and say "Your shop is being set up!" `
       prompt += `Then immediately call the "create_artisan_profile" tool with the collected data.\n\n`
       prompt += `Do NOT skip any question. Do NOT ask multiple questions at once.\n`
+      prompt += `ONCE YOU HAVE CALLED 'create_artisan_profile' AND RECEIVED A SUCCESS MESSAGE, ONBOARDING IS COMPLETE. `
+      prompt += `DO NOT ask the onboarding questions again. Immediately shift to helping them manage their business!\n`
     } else {
-      prompt += `This user already has a profile. Help them manage their business — `
-      prompt += `adding products, updating stock, checking orders, or answering business questions.\n`
+      prompt += `This user already has a profile! Here is their business context:\n`
+      if (artisanProfile) {
+        prompt += `- Name: ${artisanProfile.name}\n`
+        prompt += `- Craft: ${artisanProfile.craftType || 'Artisan Craft'}\n`
+        prompt += `- District: ${artisanProfile.region}\n`
+      }
+      if (businessSnapshot) {
+        const snap = typeof businessSnapshot === 'string' ? JSON.parse(businessSnapshot) : businessSnapshot;
+        prompt += `- 7-Day Revenue: ₹${snap.week_revenue_inr || 0}\n`
+        prompt += `- Top Selling Item: ${snap.top_seller || 'None'}\n`
+        prompt += `- Dead Stock Item: ${snap.dead_stock_item || 'None'}\n`
+        prompt += `- Pending Payments: ₹${snap.pending_payment_inr || 0}\n\n`
+      }
+      prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n`
     }
 
     return prompt
   }
 
   // ── Build the Gemini setup payload ────────────────────────────────────────
-  function buildSetupPayload(language: string, isNewUser: boolean) {
+  function buildSetupPayload(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any) {
     return {
       setup: {
-        model: 'models/gemini-2.5-flash-native-audio-latest',
+        model: 'models/gemini-2.0-flash-exp',
         generationConfig: {
           responseModalities: ['AUDIO']
         },
         systemInstruction: {
           parts: [
             {
-              text: buildSystemPrompt(language, isNewUser)
+              text: buildSystemPrompt(language, isNewUser, artisanProfile, businessSnapshot)
             }
           ]
         },
@@ -260,6 +279,15 @@ app.get('/ws', async (c) => {
                   },
                   required: ['name', 'district', 'craft_type', 'experience_years']
                 }
+              },
+              {
+                name: 'get_business_snapshot',
+                description: 'Get the artisan\'s business summary: revenue, top seller, dead stock, pending payments. Call this when she greets you or asks how business is going.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {},
+                  required: []
+                }
               }
             ]
           }
@@ -306,14 +334,18 @@ app.get('/ws', async (c) => {
 
   // ── Send setup to Gemini once we know the language ─────────────────────
   async function sendGeminiSetup(language: string, artisanId: string) {
-    // Check if this artisan already exists in the DB
     let isNewUser = true
+    let artisanProfile = null
+    let businessSnapshot = null
     try {
       if (artisanId && !artisanId.startsWith('guest_')) {
         const drizzleDb = getDrizzle(c.env.DB)
-        const existing = await drizzleDb.select().from(artisans).limit(1)
+        // Properly check if this exact artisan ID exists
+        const existing = await drizzleDb.select().from(artisans).where(eq(artisans.id, artisanId)).limit(1)
         if (existing.length > 0) {
           isNewUser = false
+          artisanProfile = existing[0]
+          businessSnapshot = await getBusinessSnapshot(c.env.DB, artisanId)
         }
       }
     } catch (err) {
@@ -321,7 +353,7 @@ app.get('/ws', async (c) => {
     }
 
     console.log(`[WS:${requestId}] Building setup. language=${language}, isNewUser=${isNewUser}, artisanId=${artisanId}`)
-    const setupPayload = buildSetupPayload(language, isNewUser)
+    const setupPayload = buildSetupPayload(language, isNewUser, artisanProfile, businessSnapshot)
 
     if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
       geminiWs.send(JSON.stringify(setupPayload))
@@ -702,6 +734,41 @@ app.get('/ws', async (c) => {
                         output: {
                           success,
                           message: toolMessage
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+              geminiWs.send(JSON.stringify(responsePayload))
+            }
+            return // Intercept: do not forward this toolCall to client
+          }
+
+          const getSnapshotCalls = functionCalls.filter(call => call.name === 'get_business_snapshot')
+          if (getSnapshotCalls.length > 0) {
+            for (const call of getSnapshotCalls) {
+              const { id } = call
+              let toolMessage = ''
+              
+              try {
+                // We use sessionArtisanId that was set during init
+                toolMessage = await getBusinessSnapshot(c.env.DB, sessionArtisanId)
+                console.log(`[WS:${requestId}] GET SNAPSHOT for artisan: ${sessionArtisanId}`)
+              } catch (err: any) {
+                toolMessage = JSON.stringify({ error: `Error fetching snapshot: ${err.message}` })
+                console.error(`[WS:${requestId}] Error fetching snapshot:`, err)
+              }
+              
+              const responsePayload = {
+                toolResponse: {
+                  functionResponses: [
+                    {
+                      id: id,
+                      name: 'get_business_snapshot',
+                      response: {
+                        output: {
+                          snapshot: toolMessage
                         }
                       }
                     }
