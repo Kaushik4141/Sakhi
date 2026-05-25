@@ -12,6 +12,8 @@ type Bindings = {
   UPSTASH_REDIS_REST_TOKEN: string
 }
 
+
+
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/', (c) => {
@@ -81,18 +83,24 @@ app.get('/marketplace', async (c) => {
 })
 
 app.get('/ws', async (c) => {
+  const requestId = crypto.randomUUID()
+  console.log(`[WS:${requestId}] Incoming /ws request`)
+
   const upgradeHeader = c.req.header('Upgrade')
   if (upgradeHeader !== 'websocket') {
+    console.warn(`[WS:${requestId}] Rejected non-websocket request. Upgrade=${upgradeHeader}`)
     return c.text('Expected WebSocket connection', 400)
   }
 
   const apiKey = c.env.GEMINI_API_KEY
   if (!apiKey) {
-    console.error('GEMINI_API_KEY is not defined')
+    console.error(`[WS:${requestId}] GEMINI_API_KEY is not defined`)
     return c.text('GEMINI_API_KEY environment variable is missing', 500)
   }
 
-  const [client, server] = new WebSocketPair()
+  const pair = new WebSocketPair()
+  const client = pair[0]
+  const server = pair[1]
   server.accept()
 
   // Connect to the Gemini Live API
@@ -103,7 +111,7 @@ app.get('/ws', async (c) => {
   const clientMessageQueue: string[] = []
 
   geminiWs.addEventListener('open', () => {
-    console.log('Connected to Gemini Live API')
+    console.log(`[WS:${requestId}] Connected to Gemini Live API`)
     
     // Send initial setup payload
     const setupPayload = {
@@ -177,27 +185,89 @@ app.get('/ws', async (c) => {
   })
 
   // Listen for messages from the client and forward them to Gemini
-  server.addEventListener('message', (event) => {
-    const data = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
-    if (geminiReady) {
-      geminiWs.send(data)
-    } else {
-      clientMessageQueue.push(data)
+  server.addEventListener('message', async (event: MessageEvent) => {
+    try {
+      const dataStr = typeof event.data === 'string'
+        ? event.data
+        : new TextDecoder().decode(
+            event.data instanceof ArrayBuffer
+              ? event.data
+              : new Uint8Array(event.data as any)
+          )
+
+      let payload;
+      try {
+        payload = JSON.parse(dataStr)
+        console.log(`[WS:${requestId}] Client message parsed. keys=${Object.keys(payload).join(',')}, bytes=${dataStr.length}`)
+      } catch (e) {
+        console.error(`[WS:${requestId}] Failed to parse client message as JSON:`, e)
+        return // Drop invalid messages to prevent crashing
+      }
+
+      if (payload.realtimeInput?.mediaChunks) {
+        const firstChunk = payload.realtimeInput.mediaChunks[0]
+        console.log(`[WS:${requestId}] Passing through realtimeInput. media_type=${firstChunk?.mimeType || 'missing'}, base64Kb=${((firstChunk?.data?.length || 0) / 1024).toFixed(1)}`)
+        if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+          geminiWs.send(dataStr)
+        } else {
+          console.warn(`[WS:${requestId}] Gemini not ready. Queueing realtimeInput. geminiReady=${geminiReady}, readyState=${geminiWs.readyState}`)
+          clientMessageQueue.push(dataStr)
+        }
+        return
+      }
+
+      // Intercept the client's custom audio event
+      if (payload.event === 'user_audio' && payload.data) {
+        console.log(`[WS:${requestId}] Received user audio. media_type=${payload.media_type || payload.mime_type || 'missing'}, base64Kb=${(payload.data.length / 1024).toFixed(1)}`)
+
+        // Send directly to the Live API session
+        const realtimeInput = {
+          realtimeInput: {
+            mediaChunks: [
+              {
+                mimeType: payload.media_type || "audio/wav",
+                data: payload.data
+              }
+            ]
+          }
+        }
+
+        const msgToSend = JSON.stringify(realtimeInput)
+        if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+          console.log(`[WS:${requestId}] Forwarding audio to Gemini`)
+          geminiWs.send(msgToSend)
+        } else {
+          console.warn(`[WS:${requestId}] Gemini not ready. Queueing audio. geminiReady=${geminiReady}, readyState=${geminiWs.readyState}`)
+          clientMessageQueue.push(msgToSend)
+        }
+        return // Always return — don't fall back to forwarding raw event
+      }
+
+      // Fallback: forward non-audio messages directly
+      if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
+        geminiWs.send(dataStr)
+      } else {
+        clientMessageQueue.push(dataStr)
+      }
+    } catch (err) {
+      console.error('[Backend] Error handling client message:', err)
     }
   })
 
   // Listen for messages from Gemini and forward them to the client
-  geminiWs.addEventListener('message', async (event) => {
-    try {
-      let dataStr: string
-      if (typeof event.data === 'string') {
-        dataStr = event.data
-      } else if (event.data instanceof ArrayBuffer) {
-        dataStr = new TextDecoder().decode(event.data)
-      } else {
-        dataStr = new TextDecoder().decode(new Uint8Array(event.data as any))
-      }
+  geminiWs.addEventListener('message', async (event: MessageEvent) => {
+    // ALWAYS decode to string first — never forward raw binary to the client.
+    // React Native WebSocket cannot reliably handle binary frames.
+    let dataStr: string
+    if (typeof event.data === 'string') {
+      dataStr = event.data
+    } else if (event.data instanceof ArrayBuffer) {
+      dataStr = new TextDecoder().decode(event.data)
+    } else {
+      dataStr = new TextDecoder().decode(new Uint8Array(event.data as any))
+    }
 
+    try {
       const payload = JSON.parse(dataStr)
       if (payload.toolCall) {
         const functionCalls = payload.toolCall.functionCalls
@@ -339,32 +409,32 @@ app.get('/ws', async (c) => {
         }
       }
     } catch (e) {
-      console.error('Error parsing Gemini message:', e)
+      console.error(`[WS:${requestId}] Error parsing Gemini message:`, e)
     }
 
-    // Forward back to client
-    server.send(event.data)
+    // Forward the decoded TEXT string to client — guarantees a text frame
+    server.send(dataStr)
   })
 
   // Manage clean disconnects
   server.addEventListener('close', () => {
-    console.log('Client connection closed')
+    console.log(`[WS:${requestId}] Client connection closed`)
     if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
       geminiWs.close()
     }
   })
 
-  geminiWs.addEventListener('close', (event) => {
-    console.log(`Gemini connection closed. Code: ${event.code}, Reason: ${event.reason}`)
+  geminiWs.addEventListener('close', (event: CloseEvent) => {
+    console.log(`[WS:${requestId}] Gemini connection closed. code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean}`)
     server.close()
   })
 
-  server.addEventListener('error', (err) => {
-    console.error('Client socket error:', err)
+  server.addEventListener('error', (err: Event) => {
+    console.error(`[WS:${requestId}] Client socket error:`, err)
   })
 
-  geminiWs.addEventListener('error', (err) => {
-    console.error('Gemini socket error:', err)
+  geminiWs.addEventListener('error', (err: Event) => {
+    console.error(`[WS:${requestId}] Gemini socket error:`, err)
   })
 
   return new Response(null, {
