@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, insertMarketInsight } from './db/db-operations'
 import { artisans } from './db/schema'
 import { runTestFlow } from './db/test-db'
 
@@ -74,6 +74,33 @@ app.get('/storefront/:slug', async (c) => {
 app.get('/marketplace', async (c) => {
   try {
     const result = await getMarketplaceFeed(c.env.DB)
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500)
+  }
+})
+
+app.post('/api/market-insights', async (c) => {
+  try {
+    const { artisanId, rawMarketData, structuredJson, kannadaDigest, roadmapKannada } = await c.req.json()
+
+    if (!artisanId) {
+      return c.json({ success: false, error: 'artisanId is required' }, 400)
+    }
+
+    const result = await insertMarketInsight(
+      c.env.DB,
+      artisanId,
+      rawMarketData,
+      structuredJson,
+      kannadaDigest,
+      roadmapKannada
+    )
+
+    if (!result.success) {
+      return c.json(result, 500)
+    }
+
     return c.json(result)
   } catch (err: any) {
     return c.json({ success: false, error: err.message }, 500)
