@@ -1,14 +1,12 @@
 import { Hono } from 'hono'
-import { neon } from '@neondatabase/serverless'
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile } from './db/db-operations'
 import { artisans } from './db/schema'
 import { runTestFlow } from './db/test-db'
 
 type Bindings = {
   GEMINI_API_KEY: string
   DB: D1Database
-  DATABASE_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
 }
@@ -528,7 +526,7 @@ app.get('/ws', async (c) => {
           if (createProfileCalls.length > 0) {
             for (const call of createProfileCalls) {
               const { id, args } = call
-              const artisanName = args?.name
+              const name = args?.name
               const district = args?.district
               const craftType = args?.craft_type
               const experienceYears = args?.experience_years
@@ -539,32 +537,17 @@ app.get('/ws', async (c) => {
               let artisanId = ''
               
               try {
-                // Generate slug: lowercase name, spaces→hyphens, append 4 random digits
-                const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-                shopSlug = artisanName
-                  .toLowerCase()
-                  .trim()
-                  .replace(/[^a-z0-9\s]/g, '')
-                  .replace(/\s+/g, '-')
-                  + '-' + randomSuffix
-
-                // Insert into Neon PostgreSQL
-                const sql = neon(c.env.DATABASE_URL)
-                const rows = await sql`
-                  INSERT INTO artisans (name, district, craft_type, shop_slug, language)
-                  VALUES (${artisanName}, ${district}, ${craftType}, ${shopSlug}, ${sessionLanguage})
-                  RETURNING id, shop_slug
-                `
-
-                if (rows.length > 0) {
-                  artisanId = rows[0].id
-                  shopSlug = rows[0].shop_slug
+                const result = await createArtisanProfile(c.env.DB, name, district, craftType, experienceYears)
+                
+                if (result.success) {
+                  artisanId = result.artisan?.id as string
+                  shopSlug = result.artisan?.shopSlug as string
                   success = true
                   const shopUrl = `https://kalamitra.in/shop/${shopSlug}`
-                  toolMessage = `Artisan profile created successfully! Shop URL: ${shopUrl}`
-                  console.log(`[WS:${requestId}] ONBOARDING SUCCESS: ID=${artisanId}, slug=${shopSlug}`)
-
-                  // Notify the client app so it can persist the artisan ID
+                  toolMessage = `Artisan profile for '${name}' created successfully! Shop URL: ${shopUrl}`
+                  console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${artisanId}, Shop = ${shopSlug}`)
+                  
+                  // Send the new artisan ID back to the client so they can store it
                   server.send(JSON.stringify({
                     type: 'artisan_created',
                     artisanId,
@@ -572,12 +555,12 @@ app.get('/ws', async (c) => {
                     shopUrl,
                   }))
                 } else {
-                  toolMessage = 'Insert returned no rows.'
-                  console.error(`[WS:${requestId}] ONBOARDING FAILED: no rows returned`)
+                  toolMessage = `Failed to create artisan profile: ${result.error}`
+                  console.error(`[WS:${requestId}] ONBOARDING FAILED: ${result.error}`)
                 }
               } catch (dbErr: any) {
-                toolMessage = `Database error: ${dbErr.message}`
-                console.error(`[WS:${requestId}] Neon DB error during onboarding:`, dbErr)
+                toolMessage = `Database transaction error: ${dbErr.message}`
+                console.error(`[WS:${requestId}] Database error during onboarding:`, dbErr)
               }
               
               const responsePayload = {

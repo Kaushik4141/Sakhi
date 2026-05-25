@@ -10,7 +10,6 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
     "@upstash/redis": "^1.38.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.3.7",

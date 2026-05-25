@@ -538,12 +538,13 @@ export async function createArtisanProfile(
   try {
     const drizzleDb = getDrizzle(db);
 
-    // Generate a URL-friendly shop slug from the name
+    // Generate a URL-friendly shop slug from the name with 4 random digits
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const shopSlug = name
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
+      .replace(/(^-|-$)/g, '') + '-' + randomSuffix;
 
     const result = await drizzleDb
       .insert(schema.artisans)
