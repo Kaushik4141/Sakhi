@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { getDb, schema } from "@/db";
-import BuyNowButton from "./BuyNowButton";
+import CheckoutButton from "@/components/CheckoutButton";
 
 export const runtime = "edge";
 
@@ -21,6 +21,7 @@ export default async function StorefrontPage({ params }: StorefrontPageProps) {
   const { artisan_slug } = await params;
   const db = getDb();
 
+  // ── Data Fetching ──────────────────────────────────────────────
   const artisan = await db.query.artisans.findFirst({
     where: eq(schema.artisans.slug, artisan_slug),
   });
@@ -35,191 +36,126 @@ export default async function StorefrontPage({ params }: StorefrontPageProps) {
   });
 
   return (
-    <main className="min-h-screen bg-[#f8f5ef]">
-      {/* ── Artisan Header ────────────────────────────────────────── */}
-      <section className="relative overflow-hidden border-b border-[#e2dcd2] bg-gradient-to-br from-[#fffaf0] via-[#f8f5ef] to-[#f0ebe1]">
-        {/* Decorative background shapes */}
-        <div className="pointer-events-none absolute -top-32 -right-32 h-80 w-80 rounded-full bg-[#c4501a]/[0.04] blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-20 -left-20 h-60 w-60 rounded-full bg-[#c4501a]/[0.03] blur-2xl" />
+    <main className="min-h-screen bg-white">
+      {/* ═══════════════════════════════════════════════════════════
+          CINEMATIC HERO — Artisan Profile
+          ═══════════════════════════════════════════════════════════ */}
+      <section className="relative overflow-hidden bg-gradient-to-b from-stone-100 to-white">
+        {/* Subtle decorative circles */}
+        <div className="pointer-events-none absolute -top-40 -right-40 h-[500px] w-[500px] rounded-full bg-amber-100/40 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-32 -left-32 h-[400px] w-[400px] rounded-full bg-stone-200/50 blur-3xl" />
 
-        <div className="relative mx-auto max-w-7xl px-6 py-14 md:px-10 lg:py-20">
-          <div className="animate-fade-in-up">
-            {/* Breadcrumb */}
-            <nav className="mb-8 flex items-center gap-2 text-sm text-[#84786a]">
-              <a
-                href="/"
-                className="transition-colors hover:text-[#c4501a]"
-              >
-                Home
-              </a>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 16 16"
-                fill="currentColor"
-                className="h-3 w-3"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <span className="font-medium text-[#5f584d]">
-                {artisan.name}
+        <div className="relative mx-auto max-w-6xl px-6 py-20 md:px-10 md:py-28 lg:py-36">
+          {/* Kicker label */}
+          <p
+            className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-amber-700/80"
+            style={{ animationDelay: "0.1s" }}
+          >
+            ✦&ensp;Artisan Storefront
+          </p>
+
+          {/* Artisan Name */}
+          <h1
+            className="text-4xl font-extrabold leading-[1.08] tracking-tight text-stone-900 md:text-6xl lg:text-7xl"
+            style={{ fontFamily: "var(--font-heading)" }}
+          >
+            {artisan.name}
+          </h1>
+
+          {/* Bio */}
+          {artisan.bio && (
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-stone-600 md:text-xl md:leading-9">
+              {artisan.bio}
+            </p>
+          )}
+
+          {/* Quick stats strip */}
+          <div className="mt-10 flex flex-wrap items-center gap-6 border-t border-stone-200 pt-8">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-stone-900 text-sm text-white">
+                {products.length}
               </span>
-            </nav>
-
-            {/* Artisan info */}
-            <div className="grid gap-10 md:grid-cols-[1fr_auto] md:items-end">
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#e2dcd2] bg-white/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-[#c4501a] shadow-sm backdrop-blur-sm">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                    className="h-3.5 w-3.5"
-                  >
-                    <path d="M15.98 1.804a1 1 0 0 0-1.96 0l-.24 1.192a1 1 0 0 1-.784.785l-1.192.238a1 1 0 0 0 0 1.962l1.192.238a1 1 0 0 1 .785.785l.238 1.192a1 1 0 0 0 1.962 0l.238-1.192a1 1 0 0 1 .785-.785l1.192-.238a1 1 0 0 0 0-1.962l-1.192-.238a1 1 0 0 1-.785-.785l-.238-1.192ZM6.949 5.684a1 1 0 0 0-1.898 0l-.683 2.051a1 1 0 0 1-.633.633l-2.051.683a1 1 0 0 0 0 1.898l2.051.684a1 1 0 0 1 .633.632l.683 2.051a1 1 0 0 0 1.898 0l.683-2.051a1 1 0 0 1 .633-.633l2.051-.683a1 1 0 0 0 0-1.898l-2.051-.683a1 1 0 0 1-.633-.633L6.95 5.684ZM13.949 13.684a1 1 0 0 0-1.898 0l-.184.551a1 1 0 0 1-.632.633l-.551.183a1 1 0 0 0 0 1.898l.551.183a1 1 0 0 1 .633.633l.183.551a1 1 0 0 0 1.898 0l.184-.551a1 1 0 0 1 .632-.633l.551-.183a1 1 0 0 0 0-1.898l-.551-.184a1 1 0 0 1-.633-.632l-.183-.551Z" />
-                  </svg>
-                  Artisan Storefront
-                </div>
-
-                <h1
-                  className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-5xl lg:text-6xl"
-                  style={{ fontFamily: "var(--font-heading)" }}
-                >
-                  {artisan.name}
-                </h1>
-
-                {artisan.bio && (
-                  <p className="mt-5 max-w-2xl text-lg leading-8 text-[#5f584d]">
-                    {artisan.bio}
-                  </p>
-                )}
-              </div>
-
-              {/* Stats card */}
-              <div className="w-full rounded-2xl border border-[#e2dcd2] bg-white/80 p-6 shadow-sm backdrop-blur-sm md:max-w-xs">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#c4501a] to-[#e06b2d] text-white shadow-md">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                      className="h-5 w-5"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M6 5v1H4.667a1.75 1.75 0 0 0-1.743 1.598l-.826 9.5A1.75 1.75 0 0 0 3.84 19H16.16a1.75 1.75 0 0 0 1.743-1.902l-.826-9.5A1.75 1.75 0 0 0 15.333 6H14V5a4 4 0 0 0-8 0Zm4-2.5A2.5 2.5 0 0 0 7.5 5v1h5V5A2.5 2.5 0 0 0 10 2.5ZM7.5 10a2.5 2.5 0 0 0 5 0V8.75a.75.75 0 0 1 1.5 0V10a4 4 0 0 1-8 0V8.75a.75.75 0 0 1 1.5 0V10Z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-[#84786a]">
-                      Collection
-                    </p>
-                    <p className="text-2xl font-bold tabular-nums">
-                      {products.length}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-2 border-t border-[#e2dcd2] pt-4 text-sm text-[#84786a]">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                  {products.length === 1
-                    ? "1 product available"
-                    : `${products.length} products available`}
-                </div>
-              </div>
+              <span className="text-sm font-medium text-stone-500">
+                {products.length === 1 ? "Product" : "Products"} Available
+              </span>
             </div>
+
+            {products.some((p) => p.isGiVerified) && (
+              <div className="flex items-center gap-2 rounded-full border border-amber-300/50 bg-amber-50 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-amber-800">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-3.5 w-3.5"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M16.403 12.652a3 3 0 0 0 0-5.304 3 3 0 0 0-3.75-3.751 3 3 0 0 0-5.305 0 3 3 0 0 0-3.751 3.75 3 3 0 0 0 0 5.305 3 3 0 0 0 3.75 3.751 3 3 0 0 0 5.305 0 3 3 0 0 0 3.751-3.75Zm-2.546-4.46a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                GI Certified Artisan
+              </div>
+            )}
           </div>
         </div>
       </section>
 
-      {/* ── Product Grid ──────────────────────────────────────────── */}
-      <section className="mx-auto max-w-7xl px-6 py-12 md:px-10 lg:py-16">
+      {/* ═══════════════════════════════════════════════════════════
+          IMMERSIVE PRODUCT GRID
+          ═══════════════════════════════════════════════════════════ */}
+      <section className="mx-auto max-w-6xl px-6 py-12 md:px-10 lg:py-16">
         {products.length > 0 ? (
           <>
             <h2
-              className="animate-fade-in-up mb-8 text-2xl font-semibold tracking-tight"
-              style={{ fontFamily: "var(--font-heading)" }}
+              className="mb-10 text-sm font-bold uppercase tracking-[0.2em] text-stone-400"
             >
-              Products
+              Collection&ensp;/&ensp;{products.length}{" "}
+              {products.length === 1 ? "piece" : "pieces"}
             </h2>
 
-            <div className="stagger-children grid gap-7 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="stagger-children grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
               {products.map((product) => (
                 <article
                   key={product.id}
                   id={`product-${product.id}`}
-                  className="group overflow-hidden rounded-2xl border border-[#e2dcd2] bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-black/[0.06]"
+                  className="group overflow-hidden rounded-xl border border-stone-200 bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
                 >
-                  {/* Image */}
-                  <div className="relative aspect-[4/3] overflow-hidden bg-gradient-to-br from-[#ede8de] to-[#ddd6c8]">
+                  {/* ── Product Image ──────────────────────────── */}
+                  <div className="relative aspect-[4/5] overflow-hidden bg-stone-100">
                     {product.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={product.imageUrl}
                         alt={product.name}
-                        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                        className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
                       />
                     ) : (
-                      <div className="flex h-full items-center justify-center px-8 text-center">
-                        <span className="text-sm font-semibold uppercase tracking-[0.2em] text-[#84786a]/60">
-                          Sakhi Craft
+                      <div className="flex h-full flex-col items-center justify-center gap-3 px-8">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={1}
+                          stroke="currentColor"
+                          className="h-12 w-12 text-stone-300"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z"
+                          />
+                        </svg>
+                        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-300">
+                          No image
                         </span>
                       </div>
                     )}
 
-                    {/* GI Badge overlay on image */}
+                    {/* ── GI Verified Badge (frosted glass) ───── */}
                     {product.isGiVerified && (
-                      <div className="absolute top-3 right-3">
-                        <div className="animate-badge-glow flex items-center gap-1.5 rounded-full border border-emerald-200 bg-white/90 px-3 py-1.5 shadow-md backdrop-blur-sm">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            className="h-4 w-4 text-emerald-600"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M16.403 12.652a3 3 0 0 0 0-5.304 3 3 0 0 0-3.75-3.751 3 3 0 0 0-5.305 0 3 3 0 0 0-3.751 3.75 3 3 0 0 0 0 5.305 3 3 0 0 0 3.75 3.751 3 3 0 0 0 5.305 0 3 3 0 0 0 3.751-3.75Zm-2.546-4.46a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                          <span className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">
-                            GI Verified
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Card body */}
-                  <div className="flex flex-col p-6">
-                    <div className="flex-1">
-                      <h3
-                        className="text-xl font-semibold leading-7 tracking-tight"
-                        style={{ fontFamily: "var(--font-heading)" }}
-                      >
-                        {product.name}
-                      </h3>
-
-                      {product.description && (
-                        <p className="mt-2.5 line-clamp-2 text-sm leading-6 text-[#665f55]">
-                          {product.description}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Price + Badge */}
-                    <div className="mt-5 flex flex-wrap items-center gap-3">
-                      <p className="text-2xl font-bold tabular-nums tracking-tight">
-                        {formatPrice.format(product.price)}
-                      </p>
-
-                      {product.isGiVerified && (
-                        <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+                      <div className="absolute top-3 right-3 z-10">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/20 px-3 py-1 text-xs font-bold text-amber-900 shadow-sm backdrop-blur-md">
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             viewBox="0 0 16 16"
@@ -232,64 +168,103 @@ export default async function StorefrontPage({ params }: StorefrontPageProps) {
                               clipRule="evenodd"
                             />
                           </svg>
-                          Verified Authentic Heritage Craft
+                          Heritage Craft
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Hover gradient overlay */}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                  </div>
+
+                  {/* ── Product Details ────────────────────────── */}
+                  <div className="flex flex-col gap-4 p-5">
+                    <div>
+                      <h3
+                        className="text-xl font-semibold leading-7 tracking-tight text-stone-900"
+                        style={{ fontFamily: "var(--font-heading)" }}
+                      >
+                        {product.name}
+                      </h3>
+
+                      {product.description && (
+                        <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-stone-500">
+                          {product.description}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Price row */}
+                    <div className="flex items-center justify-between">
+                      <p className="text-2xl font-bold tabular-nums tracking-tight text-stone-900">
+                        {formatPrice.format(product.price)}
+                      </p>
+
+                      {product.isGiVerified && (
+                        <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-amber-200">
+                          GI Verified
                         </span>
                       )}
                     </div>
 
-                    {/* Buy Now button slot */}
-                    <div className="mt-5">
-                      <BuyNowButton
-                        productId={product.id}
-                        productName={product.name}
-                        price={product.price}
-                      />
-                    </div>
+                    {/* ── Razorpay Checkout ──────────────────────── */}
+                    <CheckoutButton
+                      productId={product.id}
+                      productName={product.name}
+                      price={product.price}
+                      artisanName={artisan.name}
+                    />
                   </div>
                 </article>
               ))}
             </div>
           </>
         ) : (
-          <div className="animate-fade-in-up rounded-2xl border border-dashed border-[#cfc4b1] bg-white px-6 py-16 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#f0ebe1]">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="h-6 w-6 text-[#84786a]"
-              >
-                <path d="M5.625 1.5c-1.036 0-1.875.84-1.875 1.875v17.25c0 1.035.84 1.875 1.875 1.875h12.75c1.035 0 1.875-.84 1.875-1.875V12.75A3.75 3.75 0 0 0 16.5 9h-1.875a1.875 1.875 0 0 1-1.875-1.875V5.25A3.75 3.75 0 0 0 9 1.5H5.625Z" />
-                <path d="M12.971 1.816A5.23 5.23 0 0 1 14.25 5.25v1.875c0 .207.168.375.375.375H16.5a5.23 5.23 0 0 1 3.434 1.279 9.768 9.768 0 0 0-6.963-6.963Z" />
-              </svg>
-            </div>
+          /* ── Empty State ──────────────────────────────────────── */
+          <div className="flex flex-col items-center rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-6 py-20 text-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1}
+              stroke="currentColor"
+              className="mb-4 h-16 w-16 text-stone-300"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15.75 10.5V6a3.75 3.75 0 1 0-7.5 0v4.5m11.356-1.993 1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 0 1-1.12-1.243l1.264-12A1.125 1.125 0 0 1 5.513 7.5h12.974c.576 0 1.059.435 1.119 1.007ZM8.625 10.5a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm7.5 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
+              />
+            </svg>
             <h2
-              className="text-2xl font-semibold"
+              className="text-2xl font-semibold text-stone-800"
               style={{ fontFamily: "var(--font-heading)" }}
             >
               No products yet
             </h2>
-            <p className="mt-3 text-[#665f55]">
-              This artisan storefront is ready — products can be added from the
-              D1 database.
+            <p className="mt-2 max-w-md text-stone-500">
+              This artisan's storefront is ready. Products will appear here once
+              they are added to the database.
             </p>
           </div>
         )}
       </section>
 
-      {/* ── Footer ─────────────────────────────────────────────────── */}
-      <footer className="border-t border-[#e2dcd2] bg-[#fffaf0]">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6 text-sm text-[#84786a] md:px-10">
+      {/* ═══════════════════════════════════════════════════════════
+          FOOTER
+          ═══════════════════════════════════════════════════════════ */}
+      <footer className="border-t border-stone-200 bg-stone-50">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-stone-400 sm:flex-row md:px-10">
           <p>
             &copy; {new Date().getFullYear()}{" "}
-            <span className="font-semibold text-[#5f584d]">Sakhi</span>{" "}
-            — Heritage Craft Marketplace
+            <span className="font-semibold text-stone-600">Sakhi</span>{" "}
+            &mdash; Heritage Craft Marketplace
           </p>
           <a
             href="/"
-            className="font-medium text-[#c4501a] transition-colors hover:text-[#8b3517]"
+            className="font-medium text-stone-500 transition-colors hover:text-stone-900"
           >
-            ← All Artisans
+            &larr; Browse All Artisans
           </a>
         </div>
       </footer>
