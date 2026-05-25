@@ -682,7 +682,10 @@ export default function App() {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         console.log('[PTT] Sending turnComplete signal to Gemini');
         wsRef.current.send(JSON.stringify({
-          clientContent: { turnComplete: true }
+          clientContent: {
+            turns: [],
+            turnComplete: true
+          }
         }));
       }
       return;
