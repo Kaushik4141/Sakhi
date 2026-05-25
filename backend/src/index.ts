@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 
+import { insertProduct, getDrizzle } from './db/db-operations'
+import { artisans } from './db/schema'
+
 type Bindings = {
   GEMINI_API_KEY: string
+  DB: D1Database
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -99,7 +103,7 @@ app.get('/ws', async (c) => {
   })
 
   // Listen for messages from Gemini and forward them to the client
-  geminiWs.addEventListener('message', (event) => {
+  geminiWs.addEventListener('message', async (event) => {
     try {
       let dataStr: string
       if (typeof event.data === 'string') {
@@ -121,7 +125,45 @@ app.get('/ws', async (c) => {
               const name = args?.name
               const price = args?.price
               
-              console.log(`MOCK DB WRITE: Created ${name} for ${price}`)
+              let message = ''
+              let success = false
+              
+              try {
+                // Ensure a default artisan exists in DB
+                const drizzleDb = getDrizzle(c.env.DB)
+                const artisanList = await drizzleDb.select().from(artisans).limit(1)
+                let artisanId: string
+
+                if (artisanList.length === 0) {
+                  const newArtisan = await drizzleDb
+                    .insert(artisans)
+                    .values({
+                      name: 'Kala Mitra Artisan',
+                      region: 'Karnataka',
+                      shopSlug: 'kala-mitra-shop',
+                    })
+                    .returning()
+                  artisanId = newArtisan[0].id
+                } else {
+                  artisanId = artisanList[0].id
+                }
+
+                // Insert the product using our operation function
+                const stock = 10 // Default stock
+                const result = await insertProduct(c.env.DB, artisanId, name, price, stock)
+                
+                if (result.success) {
+                  success = true
+                  message = `Product '${name}' created successfully with price ${price} INR in DB`
+                  console.log(`DATABASE WRITE SUCCESS: Product ID = ${result.product?.id}`)
+                } else {
+                  message = `Failed to create product in DB: ${result.error}`
+                  console.error(`DATABASE WRITE FAILED: ${result.error}`)
+                }
+              } catch (dbErr: any) {
+                message = `Database transaction error: ${dbErr.message}`
+                console.error('Database transaction error:', dbErr)
+              }
               
               const responsePayload = {
                 toolResponse: {
@@ -131,8 +173,8 @@ app.get('/ws', async (c) => {
                       name: 'create_product',
                       response: {
                         output: {
-                          success: true,
-                          message: `Product '${name}' created successfully with price ${price}`
+                          success,
+                          message
                         }
                       }
                     }

@@ -4,7 +4,6 @@ export const artisans = sqliteTable('artisans', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
   name: text('name').notNull(),
   region: text('region').notNull(),
-  uinNumber: text('uin_number').notNull(),
   shopSlug: text('shop_slug').notNull(),
 });
 
@@ -14,12 +13,9 @@ export const products = sqliteTable('products', {
     .notNull()
     .references(() => artisans.id),
   name: text('name').notNull(),
-  price: integer('price').notNull(),
+  priceInr: integer('price_inr').notNull(),
   stock: integer('stock').notNull(),
   imageUrl: text('image_url').notNull(),
-  isGiVerified: integer('is_gi_verified', { mode: 'boolean' })
-    .notNull()
-    .default(false),
 });
 
 export const orders = sqliteTable('orders', {

@@ -24,11 +24,11 @@ export function getDrizzle(
  * @param db The raw D1 Database binding or an initialized Drizzle DB instance
  * @param artisanId The ID of the artisan owning the product
  * @param name The name of the product
- * @param price The price of the product (usually represented in the smallest currency unit, e.g. cents/paise)
+ * @param price The price of the product in INR (usually represented in the smallest currency unit, e.g. paise)
  * @param stock The initial stock quantity of the product
  * @param imageUrl Optional image URL (defaults to empty string to satisfy schema's .notNull() constraint)
  */
-export async function createProduct(
+export async function insertProduct(
   db: D1Database | DrizzleD1Database<typeof schema>,
   artisanId: string,
   name: string,
@@ -44,7 +44,7 @@ export async function createProduct(
       .values({
         artisanId,
         name,
-        price,
+        priceInr: price,
         stock,
         imageUrl,
       })
@@ -59,13 +59,16 @@ export async function createProduct(
       product: result[0],
     };
   } catch (error: any) {
-    console.error('Error in createProduct:', error);
+    console.error('Error in insertProduct:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
+
+// Alias for compatibility
+export { insertProduct as createProduct };
 
 /**
  * Runs a query to calculate the total revenue from 'paid' orders for this artisan,
@@ -87,7 +90,7 @@ export async function getBusinessSnapshot(
     const paidOrders = await drizzleDb
       .select({
         amount: schema.orders.amount,
-        price: schema.products.price,
+        priceInr: schema.products.priceInr,
       })
       .from(schema.orders)
       .innerJoin(schema.products, eq(schema.orders.productId, schema.products.id))
@@ -100,9 +103,9 @@ export async function getBusinessSnapshot(
 
     // Calculate total revenue.
     // Note: Since amount in the orders table represents the quantity purchased,
-    // total revenue is calculated by summing (amount * price) for each paid order.
+    // total revenue is calculated by summing (amount * priceInr) for each paid order.
     const totalRevenue = paidOrders.reduce((sum, order) => {
-      return sum + (order.amount * order.price);
+      return sum + (order.amount * order.priceInr);
     }, 0);
 
     // 2. Query to retrieve products where stock is less than 3 for this artisan.
