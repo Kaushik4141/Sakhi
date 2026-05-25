@@ -384,7 +384,13 @@ export default function App() {
         const parts = response.serverContent?.modelTurn?.parts;
         if (parts) {
           for (const part of parts) {
+            // Log any text response for debugging
+            if (part.text) {
+              console.log('[GEMINI TEXT]:', part.text);
+            }
+
             if (part.inlineData && part.inlineData.mimeType.includes('audio/pcm')) {
+              console.log('[GEMINI AUDIO] Received PCM chunk, bytes:', part.inlineData.data.length);
               const rawBase64Pcm = part.inlineData.data;
               
               // Play the voice slice instantly via the WebView's AudioContext
