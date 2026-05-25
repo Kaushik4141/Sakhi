@@ -378,7 +378,12 @@ export default function App() {
         }
 
         const response = JSON.parse(rawData);
-        console.log('[WS] Parsed message keys:', Object.keys(response));
+        // console.log('[WS] Parsed message keys:', Object.keys(response));
+
+        if (response.serverContent?.interrupted) {
+          console.log('[GEMINI] Interrupted by user voice! Stopping playback.');
+          recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop_playback' }));
+        }
 
         // Drill down to locate Gemini's audio output blocks
         const parts = response.serverContent?.modelTurn?.parts;
@@ -477,7 +482,6 @@ export default function App() {
   useFrameCallback((frameInfo) => {
     time.value = frameInfo.timeSinceFirstFrame / 1000;
     renderAmp.value = renderAmp.value + (amplitudeRef.value - renderAmp.value) * 0.12;
-    console.log('renderAmp:', renderAmp.value);
   });
 
   const wave1 = useDerivedValue(() => {
@@ -785,6 +789,15 @@ export default function App() {
     recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop' }));
   }, [updatePttState]);
 
+  // ── Session Toggle ────────────────────────────────────────────────────────
+  const toggleSession = useCallback(() => {
+    if (isRecording || pttStateRef.current === 'recording' || pttStateRef.current === 'starting') {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }, [isRecording, startRecording, stopRecording]);
+
   // ── Derived Permission States ─────────────────────────────────────────────
   const cameraGranted = cameraPermission?.granted;
   const cameraLoading = cameraPermission === null;
@@ -862,7 +875,7 @@ export default function App() {
         ) : (
           <>
             <Text style={styles.hint}>
-              {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Release to stop' : 'Hold to speak'}
+              {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Tap to end session' : 'Tap to start session'}
             </Text>
 
             {/* Outer glow ring */}
@@ -876,10 +889,9 @@ export default function App() {
               ]}
             />
 
-            {/* Push-to-Talk Button */}
+            {/* Live Session Toggle Button */}
             <Pressable
-              onPressIn={startRecording}
-              onPressOut={stopRecording}
+              onPress={toggleSession}
               disabled={!micGranted || isPttTransitioning}
               style={({ pressed }) => [styles.pttButtonWrapper]}
             >
@@ -891,9 +903,9 @@ export default function App() {
                   { transform: [{ scale: scaleAnim }] },
                 ]}
               >
-                <Text style={styles.pttIcon}>{isRecording ? '🔴' : '🎙️'}</Text>
+                <Text style={styles.pttIcon}>{isRecording ? '🛑' : '🎙️'}</Text>
                 <Text style={styles.pttLabel}>
-                  {micGranted ? (isRecording ? 'Listening…' : 'Push to Talk') : 'Awaiting Permission'}
+                  {micGranted ? (isRecording ? 'Live Session Active' : 'Connect') : 'Awaiting Permission'}
                 </Text>
               </Animated.View>
             </Pressable>
@@ -904,8 +916,8 @@ export default function App() {
                 : wsStatus === WS_STATUS.SENT
                 ? 'Audio sent ✓'
                 : isRecording
-                ? 'Audio is being captured'
-                : 'Press and hold the button to record'}
+                ? 'Listening continuously… (Gemini Live)'
+                : 'Tap to start a Live Session'}
             </Text>
           </>
         )}
