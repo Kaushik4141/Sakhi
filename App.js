@@ -12,6 +12,22 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
+
+// ─── WebSocket Config ──────────────────────────────────────────────────────────
+const WS_URL = 'ws://localhost:8787/ws';
+const DUMMY_ARTISAN_ID = 'artisan_demo_001';
+const WS_RECONNECT_DELAY_MS = 3000;
+
+// ─── WebSocket Status ──────────────────────────────────────────────────────────
+const WS_STATUS = {
+  CONNECTING: 'connecting',
+  CONNECTED:  'connected',
+  SENDING:    'sending',
+  SENT:       'sent',
+  ERROR:      'error',
+  CLOSED:     'closed',
+};
 
 // ─── Permission Status Enum ────────────────────────────────────────────────────
 const PERM_STATUS = {
@@ -115,9 +131,119 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const recordingRef = useRef(null);
 
+  // WebSocket
+  const wsRef = useRef(null);
+  const reconnectTimer = useRef(null);
+  const [wsStatus, setWsStatus] = useState(WS_STATUS.CLOSED);
+
   // Button animation
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
+
+  // ── WebSocket: Connect ────────────────────────────────────────────────────
+  const connectWebSocket = useCallback(() => {
+    // Don't open a second socket if one is already live
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+
+    console.log('[WS] Connecting to', WS_URL);
+    setWsStatus(WS_STATUS.CONNECTING);
+
+    const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      console.log('[WS] Connected');
+      setWsStatus(WS_STATUS.CONNECTED);
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+    };
+
+    ws.onmessage = (event) => {
+      console.log('[WS] Message received:', event.data);
+    };
+
+    ws.onerror = (err) => {
+      console.warn('[WS] Error:', err.message);
+      setWsStatus(WS_STATUS.ERROR);
+    };
+
+    ws.onclose = (event) => {
+      console.log('[WS] Closed. Code:', event.code);
+      setWsStatus(WS_STATUS.CLOSED);
+      // Auto-reconnect after delay
+      reconnectTimer.current = setTimeout(() => {
+        console.log('[WS] Attempting reconnect…');
+        connectWebSocket();
+      }, WS_RECONNECT_DELAY_MS);
+    };
+
+    wsRef.current = ws;
+  }, []);
+
+  // ── WebSocket: Send Audio Payload ─────────────────────────────────────────
+  /**
+   * Reads the recorded file as base64, then sends a JSON message over the
+   * WebSocket with the following shape:
+   *
+   *   {
+   *     type:        "audio_input",
+   *     artisan_id:  "artisan_demo_001",
+   *     audio_base64: "<base64 encoded audio data>",
+   *     mime_type:   "audio/m4a" | "audio/wav",
+   *     timestamp:   "<ISO 8601>"
+   *   }
+   */
+  const sendAudioPayload = useCallback(async (uri) => {
+    if (!uri) {
+      console.warn('[WS] No URI provided — skipping send');
+      return;
+    }
+
+    // Read file as base64
+    let base64Audio;
+    try {
+      base64Audio = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    } catch (fsErr) {
+      console.error('[FS] Failed to read audio file:', fsErr);
+      setWsStatus(WS_STATUS.ERROR);
+      return;
+    }
+
+    // Infer MIME type from file extension
+    const ext = uri.split('.').pop()?.toLowerCase();
+    const mimeType = ext === 'wav' ? 'audio/wav' : 'audio/m4a';
+
+    const payload = JSON.stringify({
+      type:         'audio_input',
+      artisan_id:   DUMMY_ARTISAN_ID,
+      audio_base64: base64Audio,
+      mime_type:    mimeType,
+      timestamp:    new Date().toISOString(),
+    });
+
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] Socket not open — payload dropped. Will reconnect.');
+      setWsStatus(WS_STATUS.ERROR);
+      connectWebSocket();
+      return;
+    }
+
+    try {
+      setWsStatus(WS_STATUS.SENDING);
+      ws.send(payload);
+      console.log(`[WS] Sent audio payload (${(base64Audio.length / 1024).toFixed(1)} KB base64)`);
+      setWsStatus(WS_STATUS.SENT);
+      // Reset to CONNECTED after brief visual feedback
+      setTimeout(() => setWsStatus(WS_STATUS.CONNECTED), 1500);
+    } catch (sendErr) {
+      console.error('[WS] Failed to send:', sendErr);
+      setWsStatus(WS_STATUS.ERROR);
+    }
+  }, [connectWebSocket]);
 
   // ── Request Microphone Permission ──────────────────────────────────────────
   const requestMicPermission = useCallback(async () => {
@@ -126,7 +252,7 @@ export default function App() {
     return status === 'granted';
   }, []);
 
-  // ── On Mount: Request All Permissions ─────────────────────────────────────
+  // ── On Mount: Permissions + WebSocket ─────────────────────────────────────
   useEffect(() => {
     (async () => {
       await requestCameraPermission();
@@ -137,6 +263,15 @@ export default function App() {
         playsInSilentModeIOS: true,
       });
     })();
+
+    // Open WebSocket connection
+    connectWebSocket();
+
+    // Cleanup on unmount
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (wsRef.current) wsRef.current.close();
+    };
   }, []);
 
   // ── Glow Loop While Recording ─────────────────────────────────────────────
@@ -153,7 +288,7 @@ export default function App() {
     }
   }, [isRecording]);
 
-  // ── Push to Talk Handlers ─────────────────────────────────────────────────
+  // ── Push to Talk: Start ───────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
     if (micStatus !== PERM_STATUS.GRANTED) return;
     try {
@@ -162,27 +297,33 @@ export default function App() {
       await recording.startAsync();
       recordingRef.current = recording;
       setIsRecording(true);
-
       Animated.spring(scaleAnim, { toValue: 0.92, useNativeDriver: true }).start();
     } catch (err) {
-      console.warn('Failed to start recording:', err);
+      console.warn('[PTT] Failed to start recording:', err);
     }
   }, [micStatus, scaleAnim]);
 
+  // ── Push to Talk: Stop → Read → Send ─────────────────────────────────────
   const stopRecording = useCallback(async () => {
     if (!recordingRef.current) return;
+    let uri = null;
     try {
       await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      console.log('Recording saved to:', uri);
+      uri = recordingRef.current.getURI();
+      console.log('[PTT] Recording saved to:', uri);
       recordingRef.current = null;
     } catch (err) {
-      console.warn('Failed to stop recording:', err);
+      console.warn('[PTT] Failed to stop recording:', err);
+      recordingRef.current = null;
     } finally {
       setIsRecording(false);
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
     }
-  }, [scaleAnim]);
+    // Read file + send via WebSocket (runs after UI updates)
+    if (uri) {
+      await sendAudioPayload(uri);
+    }
+  }, [scaleAnim, sendAudioPayload]);
 
   // ── Derived Permission States ─────────────────────────────────────────────
   const cameraGranted = cameraPermission?.granted;
@@ -191,6 +332,17 @@ export default function App() {
 
   const micGranted = micStatus === PERM_STATUS.GRANTED;
   const micDenied = micStatus === PERM_STATUS.DENIED;
+
+  // ── WS Status Badge config ────────────────────────────────────────────────
+  const wsStatusConfig = {
+    [WS_STATUS.CONNECTING]: { label: 'Connecting…', color: '#F59E0B', dot: '#F59E0B' },
+    [WS_STATUS.CONNECTED]:  { label: 'Connected',   color: '#22C55E', dot: '#22C55E' },
+    [WS_STATUS.SENDING]:    { label: 'Sending…',    color: '#A78BFA', dot: '#A78BFA' },
+    [WS_STATUS.SENT]:       { label: '✓ Sent',      color: '#34D399', dot: '#34D399' },
+    [WS_STATUS.ERROR]:      { label: 'WS Error',    color: '#EF4444', dot: '#EF4444' },
+    [WS_STATUS.CLOSED]:     { label: 'Disconnected',color: '#6B7280', dot: '#6B7280' },
+  };
+  const wsBadge = wsStatusConfig[wsStatus];
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -201,6 +353,12 @@ export default function App() {
       <View style={styles.header}>
         <View style={styles.headerDot} />
         <Text style={styles.headerTitle}>Sakhi</Text>
+        {/* WebSocket status badge */}
+        <View style={[styles.wsBadge, { borderColor: wsBadge.color + '55' }]}>
+          <View style={[styles.wsDot, { backgroundColor: wsBadge.dot }]} />
+          <Text style={[styles.wsLabel, { color: wsBadge.color }]}>{wsBadge.label}</Text>
+        </View>
+        {/* REC indicator */}
         {isRecording && (
           <Animated.View style={[styles.recIndicator, { opacity: glowAnim }]}>
             <View style={styles.recDot} />
@@ -280,7 +438,11 @@ export default function App() {
             </Pressable>
 
             <Text style={styles.footerHint}>
-              {isRecording
+              {wsStatus === WS_STATUS.SENDING
+                ? 'Uploading audio…'
+                : wsStatus === WS_STATUS.SENT
+                ? 'Audio sent ✓'
+                : isRecording
                 ? 'Audio is being captured'
                 : 'Press and hold the button to record'}
             </Text>
@@ -315,6 +477,29 @@ const styles = StyleSheet.create({
     borderBottomColor: BORDER,
     backgroundColor: BG,
     gap: 8,
+    flexWrap: 'nowrap',
+  },
+
+  // WebSocket badge
+  wsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  wsDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  wsLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.4,
   },
   headerDot: {
     width: 10,
