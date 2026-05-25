@@ -857,21 +857,13 @@ export default function App() {
       setIsRecording(false);
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
       
-      // Since turnComplete is rejected by this experimental native audio model,
-      // we force the server-side VAD to trigger by sending 1.5 seconds of perfect silence.
+      // Send turnComplete to force Gemini to respond immediately without waiting for VAD
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        console.log('[PTT] Sending 1.5s of silence to trigger Gemini VAD');
-        // 1.5 seconds of 16kHz 16-bit PCM = 48000 bytes = exactly 64000 'A's in base64
-        const silenceBase64 = "A".repeat(64000);
+        console.log('[PTT] Sending turnComplete to Gemini');
         wsRef.current.send(JSON.stringify({
-          realtimeInput: {
-            mediaChunks: [
-              {
-                mimeType: 'audio/pcm;rate=16000',
-                data: silenceBase64,
-              },
-            ],
-          },
+          clientContent: {
+            turnComplete: true
+          }
         }));
       }
       return;
