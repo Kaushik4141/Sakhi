@@ -890,7 +890,7 @@ export default function App() {
         }
 
         // Start Gemini Live Session
-        geminiLiveSession.connect();
+        connectWebSocket();
       } catch (err) {
         console.warn('[Init] Failed to initialize mic or socket:', err);
       }
@@ -899,9 +899,9 @@ export default function App() {
     // Cleanup on unmount
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      geminiLiveSession.disconnect();
+      if (wsRef.current) wsRef.current.close();
     };
-  }, [hasSelectedLanguage, geminiLiveSession, requestMicPermission, startRecording]);
+  }, [hasSelectedLanguage, requestMicPermission, startRecording, connectWebSocket]);
 
   // ── Glow Loop While Recording ─────────────────────────────────────────────
   useEffect(() => {
