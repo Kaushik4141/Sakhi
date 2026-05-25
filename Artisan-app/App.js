@@ -10,10 +10,15 @@ import {
   SafeAreaView,
   Platform,
   NativeModules,
+  Dimensions,
+  Easing,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { WebView } from 'react-native-webview';
+import { useSharedValue, withTiming, useDerivedValue, useFrameCallback } from 'react-native-reanimated';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Canvas, Path, Skia, LinearGradient, vec } from '@shopify/react-native-skia';
 
 // ─── WebSocket Config ──────────────────────────────────────────────────────────
 function getDevServerHost() {
@@ -288,55 +293,7 @@ function PermissionDeniedScreen({ type, onRetry }) {
   );
 }
 
-// ─── Waveform Visualiser (decorative) ─────────────────────────────────────────
-function WaveformBars({ isRecording }) {
-  const bars = useRef(Array.from({ length: 5 }, () => new Animated.Value(0.3))).current;
-
-  useEffect(() => {
-    let animations = [];
-    if (isRecording) {
-      animations = bars.map((bar, i) =>
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(bar, {
-              toValue: 0.2 + Math.random() * 0.8,
-              duration: 200 + i * 80,
-              useNativeDriver: true,
-            }),
-            Animated.timing(bar, {
-              toValue: 0.2 + Math.random() * 0.5,
-              duration: 200 + i * 80,
-              useNativeDriver: true,
-            }),
-          ])
-        )
-      );
-      animations.forEach((a) => a.start());
-    } else {
-      bars.forEach((bar) => {
-        Animated.timing(bar, { toValue: 0.3, duration: 200, useNativeDriver: true }).start();
-      });
-    }
-    return () => animations.forEach((a) => a.stop());
-  }, [isRecording]);
-
-  return (
-    <View style={styles.waveformContainer}>
-      {bars.map((bar, i) => (
-        <Animated.View
-          key={i}
-          style={[
-            styles.waveformBar,
-            {
-              transform: [{ scaleY: bar }],
-              backgroundColor: isRecording ? '#A78BFA' : 'rgba(167,139,250,0.3)',
-            },
-          ]}
-        />
-      ))}
-    </View>
-  );
-}
+// WaveformBars replaced by SiriWaveform (see SiriWaveform.js)
 
 // ─── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
@@ -354,6 +311,12 @@ export default function App() {
   const recorderReadyRef = useRef(false);
   const pcmChunkCountRef = useRef(0);
   const stopRequestedDuringStartRef = useRef(false);
+
+  // Reanimated shared value for live microphone volume metering
+  const volumeLevel = useSharedValue(0);
+
+  // Camera overlay visibility state
+  const [showCamera, setShowCamera] = useState(false);
 
   // WebSocket
   const wsRef = useRef(null);
@@ -470,9 +433,215 @@ export default function App() {
         connectWebSocket();
       }, WS_RECONNECT_DELAY_MS);
     };
+  // ── Waveform setup ──
+  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
-    wsRef.current = ws;
+  // ── Profile slide animation state ──
+  const profileSlide = useRef(new Animated.Value(-screenWidth)).current;
+  const profileContentProgress = useRef(new Animated.Value(0)).current;
+  const [profileVisible, setProfileVisible] = useState(false);
+
+  const openProfile = () => {
+    setProfileVisible(true);
+    Animated.parallel([
+      Animated.spring(profileSlide, {
+        toValue: 0,
+        damping: 20,
+        stiffness: 150,
+        useNativeDriver: true,
+      }),
+      Animated.timing(profileContentProgress, {
+        toValue: 1,
+        duration: 350,
+        easing: Easing.out(Easing.back(1.5)),
+        useNativeDriver: true,
+      })
+    ]).start();
+  };
+
+  const closeProfile = () => {
+    Animated.parallel([
+      Animated.timing(profileSlide, {
+        toValue: -screenWidth,
+        duration: 280,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(profileContentProgress, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    ]).start(() => setProfileVisible(false));
+  };
+
+  const amplitudeRef = useSharedValue(0);
+  const renderAmp = useSharedValue(0);
+
+  const time = useSharedValue(0);
+  useFrameCallback((frameInfo) => {
+    time.value = frameInfo.timeSinceFirstFrame / 1000;
+    renderAmp.value = renderAmp.value + (amplitudeRef.value - renderAmp.value) * 0.12;
+    console.log('renderAmp:', renderAmp.value);
+  });
+
+  const wave1 = useDerivedValue(() => {
+    const strokePath = Skia.Path.Make();
+    const fillPath = Skia.Path.Make();
+    const baseline = 60;
+    const phaseOffset = 0;
+    const freq = 1.8;
+    const speed = 2.5;
+
+    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
+    strokePath.moveTo(0, startY);
+    fillPath.moveTo(0, startY);
+
+    for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
+      const y = baseline + renderAmp.value * Math.sin(angle);
+      strokePath.lineTo(x, y);
+      fillPath.lineTo(x, y);
+    }
+    fillPath.lineTo(screenWidth, 120);
+    fillPath.lineTo(0, 120);
+    fillPath.close();
+
+    return { stroke: strokePath, fill: fillPath };
+  });
+
+  const wave2 = useDerivedValue(() => {
+    const strokePath = Skia.Path.Make();
+    const fillPath = Skia.Path.Make();
+    const baseline = 60;
+    const phaseOffset = 2.2;
+    const freq = 2.4;
+    const speed = -1.8;
+
+    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
+    strokePath.moveTo(0, startY);
+    fillPath.moveTo(0, startY);
+
+    for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
+      const y = baseline + renderAmp.value * Math.sin(angle);
+      strokePath.lineTo(x, y);
+      fillPath.lineTo(x, y);
+    }
+    fillPath.lineTo(screenWidth, 120);
+    fillPath.lineTo(0, 120);
+    fillPath.close();
+
+    return { stroke: strokePath, fill: fillPath };
+  });
+
+  const wave3 = useDerivedValue(() => {
+    const strokePath = Skia.Path.Make();
+    const fillPath = Skia.Path.Make();
+    const baseline = 60;
+    const phaseOffset = 4.5;
+    const freq = 1.3;
+    const speed = 1.2;
+
+    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
+    strokePath.moveTo(0, startY);
+    fillPath.moveTo(0, startY);
+
+    for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
+      const y = baseline + renderAmp.value * Math.sin(angle);
+      strokePath.lineTo(x, y);
+      fillPath.lineTo(x, y);
+    }
+    fillPath.lineTo(screenWidth, 120);
+    fillPath.lineTo(0, 120);
+    fillPath.close();
+
+    return { stroke: strokePath, fill: fillPath };
+  });
+
+  const wave4 = useDerivedValue(() => {
+    const strokePath = Skia.Path.Make();
+    const fillPath = Skia.Path.Make();
+    const baseline = 60;
+    const phaseOffset = 1.1;
+    const freq = 3.0;
+    const speed = -3.0;
+
+    const startY = baseline + renderAmp.value * Math.sin(phaseOffset + time.value * speed);
+    strokePath.moveTo(0, startY);
+    fillPath.moveTo(0, startY);
+
+    for (let x = 1.5; x <= screenWidth; x += 1.5) {
+      const angle = (x / screenWidth) * freq * 2 * Math.PI + phaseOffset + time.value * speed;
+      const y = baseline + renderAmp.value * Math.sin(angle);
+      strokePath.lineTo(x, y);
+      fillPath.lineTo(x, y);
+    }
+    fillPath.lineTo(screenWidth, 120);
+    fillPath.lineTo(0, 120);
+    fillPath.close();
+
+    return { stroke: strokePath, fill: fillPath };
+  });
+
+  const wave1Fill = useDerivedValue(() => wave1.value.fill);
+  const wave1Stroke = useDerivedValue(() => wave1.value.stroke);
+  const wave2Fill = useDerivedValue(() => wave2.value.fill);
+  const wave2Stroke = useDerivedValue(() => wave2.value.stroke);
+  const wave3Fill = useDerivedValue(() => wave3.value.fill);
+  const wave3Stroke = useDerivedValue(() => wave3.value.stroke);
+  const wave4Fill = useDerivedValue(() => wave4.value.fill);
+  const wave4Stroke = useDerivedValue(() => wave4.value.stroke);
+
+  // ── Request Microphone Permission ──────────────────────────────────────────
+  const requestMicPermission = useCallback(async () => {
+    const { status } = await Audio.requestPermissionsAsync();
+    setMicStatus(status === 'granted' ? PERM_STATUS.GRANTED : PERM_STATUS.DENIED);
+    return status === 'granted';
   }, []);
+
+  // ── Push to Talk: Start ───────────────────────────────────────────────────
+  const startRecording = useCallback(async () => {
+    try {
+      // Check permission directly to avoid closure race conditions
+      const { granted } = await Audio.getPermissionsAsync();
+      if (!granted) return;
+
+      // If already recording, don't start a new one
+      if (recordingRef.current) return;
+
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync({
+        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        isMeteringEnabled: true,
+      });
+      recording.setOnRecordingStatusUpdate((status) => {
+        console.log('raw metering:', status.metering);
+        if (status.isRecording && status.metering !== undefined) {
+          const db = status.metering;
+          const minDb = -60;
+          const maxDb = -10;
+          let val = (db - minDb) / (maxDb - minDb);
+          val = Math.max(0, Math.min(1, val));
+          volumeLevel.value = val;
+          const normalized = val * 28;
+          amplitudeRef.value = normalized;
+          console.log('normalized amp:', normalized);
+        } else {
+          amplitudeRef.value = 0;
+        }
+      });
+      await recording.startAsync();
+      await recording.setProgressUpdateInterval(80);
+      recordingRef.current = recording;
+      setIsRecording(true);
+      Animated.spring(scaleAnim, { toValue: 0.92, useNativeDriver: true }).start();
+    } catch (err) {
+      console.warn('[PTT] Failed to start recording:', err);
+    }
+  }, [scaleAnim, volumeLevel]);
 
   // ── WebSocket: Send Audio Payload ─────────────────────────────────────────
   /**
@@ -575,30 +744,8 @@ export default function App() {
     const { status } = await Audio.requestPermissionsAsync();
     setMicStatus(status === 'granted' ? PERM_STATUS.GRANTED : PERM_STATUS.DENIED);
     return status === 'granted';
-  }, []);
-
-  // ── On Mount: Permissions + WebSocket ─────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      await requestCameraPermission();
-      await requestMicPermission();
-      // Configure audio session
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-    })();
-
-    // Open WebSocket connection
-    connectWebSocket();
-
-    // Cleanup on unmount
-    return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop' }));
-      if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [geminiLiveSession, requestMicPermission, startRecording]);
 
   // ── Glow Loop While Recording ─────────────────────────────────────────────
   useEffect(() => {
@@ -658,10 +805,10 @@ export default function App() {
   const wsStatusConfig = {
     [WS_STATUS.CONNECTING]: { label: 'Connecting…', color: '#F59E0B', dot: '#F59E0B' },
     [WS_STATUS.CONNECTED]:  { label: 'Connected',   color: '#22C55E', dot: '#22C55E' },
-    [WS_STATUS.SENDING]:    { label: 'Sending…',    color: '#A78BFA', dot: '#A78BFA' },
+    [WS_STATUS.SENDING]:    { label: 'Sending…',    color: '#FFFFFF', dot: '#FFFFFF' },
     [WS_STATUS.SENT]:       { label: '✓ Sent',      color: '#34D399', dot: '#34D399' },
     [WS_STATUS.ERROR]:      { label: 'WS Error',    color: '#EF4444', dot: '#EF4444' },
-    [WS_STATUS.CLOSED]:     { label: 'Disconnected',color: '#6B7280', dot: '#6B7280' },
+    [WS_STATUS.CLOSED]:     { label: 'Disconnected',color: '#555555', dot: '#555555' },
   };
   const wsBadge = wsStatusConfig[wsStatus];
 
@@ -685,51 +832,39 @@ export default function App() {
 
       {/* ── Header ── */}
       <View style={styles.header}>
-        <View style={styles.headerDot} />
-        <Text style={styles.headerTitle}>Sakhi</Text>
-        {/* WebSocket status badge */}
-        <View style={[styles.wsBadge, { borderColor: wsBadge.color + '55' }]}>
-          <View style={[styles.wsDot, { backgroundColor: wsBadge.dot }]} />
-          <Text style={[styles.wsLabel, { color: wsBadge.color }]}>{wsBadge.label}</Text>
+        {/* Profile section top-left */}
+        <TouchableOpacity style={{ alignItems: 'center' }} activeOpacity={0.8} onPress={openProfile}>
+          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#1a1a1a', borderWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '700' }}>A</Text>
+          </View>
+          <Text style={{ fontSize: 9, color: '#555', letterSpacing: 1, marginTop: 3 }}>PROFILE</Text>
+        </TouchableOpacity>
+
+        {/* Right side container: Sakhi & Connection status pill */}
+        <View style={{ alignItems: 'flex-end', gap: 4, marginLeft: 'auto' }}>
+          <Text style={styles.headerTitle}>Sakhi</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {isRecording && (
+              <Animated.View style={[styles.recIndicator, { opacity: glowAnim }]}>
+                <View style={styles.recDot} />
+                <Text style={styles.recText}>REC</Text>
+              </Animated.View>
+            )}
+            {/* WebSocket status badge */}
+            <View style={styles.wsBadge}>
+              <View style={[styles.wsDot, { backgroundColor: wsBadge.dot }]} />
+              <Text style={[styles.wsLabel, { color: wsBadge.color }]}>{wsBadge.label}</Text>
+            </View>
+          </View>
         </View>
-        {/* REC indicator */}
-        {isRecording && (
-          <Animated.View style={[styles.recIndicator, { opacity: glowAnim }]}>
-            <View style={styles.recDot} />
-            <Text style={styles.recText}>REC</Text>
-          </Animated.View>
-        )}
       </View>
 
-      {/* ── Top Half: Camera Feed ── */}
-      <View style={styles.cameraSection}>
-        {cameraLoading ? (
-          <View style={styles.cameraPlaceholder}>
-            <Text style={styles.loadingText}>Initializing camera…</Text>
-          </View>
-        ) : cameraDenied ? (
-          <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
-        ) : cameraGranted ? (
-          <CameraView style={styles.camera} facing="back">
-            {/* Corner frame overlays */}
-            <View style={styles.cornerTL} />
-            <View style={styles.cornerTR} />
-            <View style={styles.cornerBL} />
-            <View style={styles.cornerBR} />
-            {/* Live badge */}
-            <View style={styles.liveBadge}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
-          </CameraView>
-        ) : (
-          <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
-        )}
-      </View>
+      {/* ── Top Half: Camera Feed Placeholder ── */}
+      <View style={{ flex: 1, backgroundColor: '#000' }} />
 
       {/* ── Bottom Half: Push to Talk ── */}
       <View style={styles.bottomSection}>
-        {micDenied ? (
+        {micDenied && (
           <PermissionDeniedScreen type="microphone" onRetry={requestMicPermission} />
         ) : (
           <>
@@ -784,17 +919,213 @@ export default function App() {
           </>
         )}
       </View>
+
+      {/* ── Persistent Skia Waveform Canvas ── */}
+      <Canvas style={{ width: '100%', height: 120, position: 'absolute', bottom: 0, left: 0 }}>
+        {/* Layer 4: #444, opacity 0.15, strokeWidth 0.6 */}
+        <Path path={wave4Fill} style="fill">
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(0, 120)}
+            colors={['rgba(68, 68, 68, 0.07)', 'rgba(68, 68, 68, 0)']}
+          />
+        </Path>
+        <Path path={wave4Stroke} style="stroke" strokeWidth={0.6} color="#444" opacity={0.15} />
+
+        {/* Layer 3: #777, opacity 0.28, strokeWidth 0.8 */}
+        <Path path={wave3Fill} style="fill">
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(0, 120)}
+            colors={['rgba(119, 119, 119, 0.07)', 'rgba(119, 119, 119, 0)']}
+          />
+        </Path>
+        <Path path={wave3Stroke} style="stroke" strokeWidth={0.8} color="#777" opacity={0.28} />
+
+        {/* Layer 2: #bbb, opacity 0.5, strokeWidth 1.2 */}
+        <Path path={wave2Fill} style="fill">
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(0, 120)}
+            colors={['rgba(187, 187, 187, 0.07)', 'rgba(187, 187, 187, 0)']}
+          />
+        </Path>
+        <Path path={wave2Stroke} style="stroke" strokeWidth={1.2} color="#bbb" opacity={0.5} />
+
+        {/* Layer 1: #fff, opacity 1, strokeWidth 2 */}
+        <Path path={wave1Fill} style="fill">
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(0, 120)}
+            colors={['rgba(255, 255, 255, 0.07)', 'rgba(255, 255, 255, 0)']}
+          />
+        </Path>
+        <Path path={wave1Stroke} style="stroke" strokeWidth={2} color="#fff" opacity={1} />
+      </Canvas>
+
+      {/* ── Camera Floating Action Button ── */}
+      <TouchableOpacity
+        style={styles.camFab}
+        onPress={() => setShowCamera(true)}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.camFabText}>📷</Text>
+      </TouchableOpacity>
+
+      {/* ── Conditional Camera Overlay ── */}
+      {showCamera && (
+        <CameraOverlay
+          onClose={() => setShowCamera(false)}
+          cameraGranted={cameraGranted}
+          cameraLoading={cameraLoading}
+          cameraDenied={cameraDenied}
+          requestCameraPermission={requestCameraPermission}
+        />
+      )}
+
+      {/* ── Profile Overlay ── */}
+      {profileVisible && (
+        <Animated.View style={{
+          position: 'absolute',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: '#000',
+          transform: [{ translateX: profileSlide }],
+          zIndex: 1001,
+          paddingTop: 60,
+        }}>
+
+          {/* Header row */}
+          <Animated.View style={{
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            paddingHorizontal: 24,
+            marginBottom: 0,
+            opacity: profileContentProgress,
+          }}>
+            <TouchableOpacity onPress={closeProfile}>
+              <Text style={{ color: '#fff', fontSize: 13, letterSpacing: 1 }}>← BACK</Text>
+            </TouchableOpacity>
+            <Text style={{
+              color: '#fff',
+              fontSize: 20,
+              fontWeight: '800',
+              letterSpacing: 4,
+            }}>SAKHI</Text>
+          </Animated.View>
+
+          {/* Center content — matches sketch */}
+          <View style={{
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: 24,
+          }}>
+
+            {/* Profile picture circle */}
+            <Animated.View style={{
+              width: 180,
+              height: 180,
+              borderRadius: 90,
+              backgroundColor: '#111',
+              borderWidth: 0.5,
+              borderColor: '#333',
+              justifyContent: 'center',
+              alignItems: 'center',
+              overflow: 'hidden',
+              opacity: profileContentProgress,
+              transform: [{
+                scale: profileContentProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.8, 1],
+                })
+              }]
+            }}>
+              {/* Replace with <Image source={profileImage} style={{ width: 180, height: 180 }} /> when available */}
+              <Text style={{ color: '#555', fontSize: 12, letterSpacing: 1.5 }}>PHOTO</Text>
+            </Animated.View>
+
+            {/* Name pill — matches sketch rectangle */}
+            <Animated.View style={{
+              borderWidth: 0.5,
+              borderColor: '#333',
+              borderRadius: 10,
+              paddingVertical: 14,
+              paddingHorizontal: 40,
+              backgroundColor: '#0d0d0d',
+              minWidth: 200,
+              alignItems: 'center',
+              opacity: profileContentProgress,
+              transform: [{
+                translateY: profileContentProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [25, 0],
+                })
+              }]
+            }}>
+              <Text style={{
+                color: '#fff',
+                fontSize: 18,
+                fontWeight: '600',
+                letterSpacing: 1,
+              }}>Artisan Name</Text>
+            </Animated.View>
+
+            {/* Leave blank space below for future additions */}
+            <View style={{ height: 120 }} />
+
+          </View>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
 
+// ─── CameraOverlay Component ──────────────────────────────────────────────────
+function CameraOverlay({ onClose, cameraGranted, cameraLoading, cameraDenied, requestCameraPermission }) {
+  useEffect(() => {
+    if (!cameraGranted && !cameraDenied && !cameraLoading) {
+      requestCameraPermission();
+    }
+  }, [cameraGranted, cameraDenied, cameraLoading, requestCameraPermission]);
+
+  return (
+    <View style={styles.overlayContainer}>
+      {cameraLoading ? (
+        <View style={styles.cameraPlaceholder}>
+          <Text style={styles.loadingText}>Initializing camera…</Text>
+        </View>
+      ) : cameraDenied ? (
+        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
+      ) : cameraGranted ? (
+        <CameraView style={StyleSheet.absoluteFillObject} facing="back">
+          {/* Corner frame overlays */}
+          <View style={styles.cornerTL} />
+          <View style={styles.cornerTR} />
+          <View style={styles.cornerBL} />
+          <View style={styles.cornerBR} />
+
+          {/* Header overlay */}
+          <View style={styles.overlayHeader}>
+            <Text style={styles.overlayTitle}>Sakhi Lens</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.8}>
+              <Text style={styles.closeButtonText}>✕ Close</Text>
+            </TouchableOpacity>
+          </View>
+        </CameraView>
+      ) : (
+        <PermissionDeniedScreen type="camera" onRetry={requestCameraPermission} />
+      )}
+    </View>
+  );
+}
+
 // ─── Styles ────────────────────────────────────────────────────────────────────
-const PURPLE = '#A78BFA';
-const PURPLE_DARK = '#7C3AED';
-const PINK = '#F472B6';
-const BG = '#0A0A14';
-const SURFACE = '#13131F';
-const BORDER = '#1E1E30';
+const BG = '#000000';
+const SURFACE = '#0d0d0d';
+const BORDER = '#222222';
+const TEXT_PRIMARY = '#ffffff';
+const TEXT_SECONDARY = '#555555';
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -812,16 +1143,16 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 0.5,
     borderBottomColor: BORDER,
     backgroundColor: BG,
-    gap: 8,
-    flexWrap: 'nowrap',
   },
 
-  // WebSocket badge
+  // WebSocket badge (styled as Card)
   wsBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -829,8 +1160,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 20,
-    borderWidth: 1,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 0.5,
+    borderColor: BORDER,
+    backgroundColor: SURFACE,
   },
   wsDot: {
     width: 6,
@@ -846,25 +1178,24 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: PURPLE,
+    backgroundColor: TEXT_PRIMARY,
   },
   headerTitle: {
-    flex: 1,
     fontSize: 20,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: TEXT_PRIMARY,
     letterSpacing: 1.5,
   },
   recIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(239,68,68,0.2)',
+    backgroundColor: 'rgba(239,68,68,0.1)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.5)',
+    borderWidth: 0.5,
+    borderColor: '#EF4444',
   },
   recDot: {
     width: 7,
@@ -882,7 +1213,7 @@ const styles = StyleSheet.create({
   // Camera Section
   cameraSection: {
     flex: 1,
-    backgroundColor: '#050508',
+    backgroundColor: BG,
     overflow: 'hidden',
   },
   camera: {
@@ -892,10 +1223,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#050508',
+    backgroundColor: BG,
   },
   loadingText: {
-    color: 'rgba(255,255,255,0.4)',
+    color: TEXT_SECONDARY,
     fontSize: 15,
   },
 
@@ -906,9 +1237,9 @@ const styles = StyleSheet.create({
     left: 16,
     width: 28,
     height: 28,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: PURPLE,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: TEXT_SECONDARY,
     borderRadius: 2,
   },
   cornerTR: {
@@ -917,9 +1248,9 @@ const styles = StyleSheet.create({
     right: 16,
     width: 28,
     height: 28,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-    borderColor: PURPLE,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+    borderColor: TEXT_SECONDARY,
     borderRadius: 2,
   },
   cornerBL: {
@@ -928,9 +1259,9 @@ const styles = StyleSheet.create({
     left: 16,
     width: 28,
     height: 28,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: PURPLE,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: TEXT_SECONDARY,
     borderRadius: 2,
   },
   cornerBR: {
@@ -939,9 +1270,9 @@ const styles = StyleSheet.create({
     right: 16,
     width: 28,
     height: 28,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderColor: PURPLE,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    borderColor: TEXT_SECONDARY,
     borderRadius: 2,
   },
 
@@ -953,12 +1284,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 0.5,
+    borderColor: BORDER,
   },
   liveDot: {
     width: 7,
@@ -967,88 +1298,59 @@ const styles = StyleSheet.create({
     backgroundColor: '#22C55E',
   },
   liveText: {
-    color: '#FFFFFF',
+    color: TEXT_PRIMARY,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1.5,
   },
 
-  // Bottom Section
+  // Bottom Section (styled as Card container)
   bottomSection: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: SURFACE,
     paddingHorizontal: 28,
-    paddingVertical: 24,
-    gap: 16,
-    borderTopWidth: 1,
+    paddingTop: 24,
+    paddingBottom: 130, // Pushes button up to avoid overlap with bottom-positioned waveform
+    borderTopWidth: 0.5,
     borderTopColor: BORDER,
   },
 
   hint: {
-    color: 'rgba(255,255,255,0.45)',
+    color: TEXT_SECONDARY,
     fontSize: 13,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
 
-  // Waveform
-  waveformContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    height: 40,
-  },
-  waveformBar: {
-    width: 5,
-    height: 32,
-    borderRadius: 3,
-  },
 
-  // Glow Ring
-  glowRing: {
-    position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: PURPLE,
-    shadowColor: PURPLE,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 30,
-    elevation: 20,
-  },
-
-  // PTT Button
+  // PTT Button (styled as Card/Grey Button)
   pttButtonWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
   },
   pttButton: {
-    width: 170,
-    height: 170,
-    borderRadius: 85,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: PURPLE_DARK,
-    borderWidth: 3,
-    borderColor: PURPLE,
-    shadowColor: PURPLE,
+    backgroundColor: BG,
+    borderWidth: 0.5,
+    borderColor: BORDER,
+    shadowColor: BORDER,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 20,
-    elevation: 15,
-    gap: 10,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
   },
   pttButtonActive: {
-    backgroundColor: '#6D28D9',
-    borderColor: PINK,
-    shadowColor: PINK,
-    shadowOpacity: 0.9,
-    shadowRadius: 30,
+    backgroundColor: SURFACE,
+    borderColor: TEXT_SECONDARY,
+    shadowColor: TEXT_SECONDARY,
+    shadowOpacity: 0.5,
+    shadowRadius: 15,
   },
   pttButtonTransitioning: {
     opacity: 0.7,
@@ -1057,7 +1359,7 @@ const styles = StyleSheet.create({
     fontSize: 42,
   },
   pttLabel: {
-    color: '#FFFFFF',
+    color: TEXT_PRIMARY,
     fontSize: 13,
     fontWeight: '600',
     letterSpacing: 0.4,
@@ -1065,7 +1367,7 @@ const styles = StyleSheet.create({
   },
 
   footerHint: {
-    color: 'rgba(255,255,255,0.25)',
+    color: TEXT_SECONDARY,
     fontSize: 12,
     textAlign: 'center',
   },
@@ -1084,28 +1386,88 @@ const styles = StyleSheet.create({
   permTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: TEXT_PRIMARY,
     textAlign: 'center',
   },
   permBody: {
     fontSize: 14,
-    color: 'rgba(255,255,255,0.55)',
+    color: TEXT_SECONDARY,
     textAlign: 'center',
     lineHeight: 22,
   },
   retryButton: {
     marginTop: 8,
-    backgroundColor: PURPLE_DARK,
+    backgroundColor: BG,
     paddingHorizontal: 28,
     paddingVertical: 14,
     borderRadius: 30,
-    borderWidth: 1,
-    borderColor: PURPLE,
+    borderWidth: 0.5,
+    borderColor: BORDER,
   },
   retryButtonText: {
-    color: '#FFFFFF',
+    color: TEXT_PRIMARY,
     fontSize: 15,
     fontWeight: '600',
     letterSpacing: 0.3,
+  },
+  camFab: {
+    position: 'absolute',
+    bottom: 130,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#0d0d0d',
+    borderWidth: 0.5,
+    borderColor: '#222222',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#ffffff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 5,
+    zIndex: 998,
+  },
+  camFabText: {
+    fontSize: 22,
+  },
+  overlayContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+    zIndex: 1000,
+  },
+  overlayHeader: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 0.5,
+    borderColor: '#222222',
+  },
+  overlayTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  closeButton: {
+    backgroundColor: '#1C1C1C',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 15,
+    borderWidth: 0.5,
+    borderColor: '#222222',
+  },
+  closeButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
