@@ -457,6 +457,9 @@ export default function App() {
   const wsAttemptRef = useRef(0);
   const [wsStatus, setWsStatus] = useState(WS_STATUS.CLOSED);
 
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const speakingTimeoutRef = useRef(null);
+
   // Button animation
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -572,6 +575,9 @@ export default function App() {
                 command: 'play_chunk', 
                 data: rawBase64Pcm 
               }));
+              setIsSpeaking(true);
+              if (speakingTimeoutRef.current) clearTimeout(speakingTimeoutRef.current);
+              speakingTimeoutRef.current = setTimeout(() => setIsSpeaking(false), 1500);
             }
           }
         }
@@ -1021,6 +1027,43 @@ export default function App() {
   };
   const wsBadge = wsStatusConfig[wsStatus];
 
+  // ── State Pill Logic ──
+  const [showPill, setShowPill] = useState(true);
+
+  let pillState = 'disconnected';
+  let pillLabel = '';
+  let pillColor = '#555';
+  let hasPulse = false;
+
+  if (wsStatus === WS_STATUS.CONNECTING) {
+    pillState = 'connecting';
+    pillLabel = 'Connecting...';
+    pillColor = '#6b7280'; // gray
+  } else if (wsStatus === WS_STATUS.CONNECTED) {
+    if (isRecording) {
+      pillState = 'listening';
+      pillLabel = 'Listening...';
+      pillColor = '#f59e0b'; // amber
+    } else if (isSpeaking) {
+      pillState = 'speaking';
+      pillLabel = 'Speaking...';
+      pillColor = '#3b82f6'; // blue
+    } else {
+      pillState = 'connected';
+      pillLabel = 'Connected';
+      pillColor = '#22c55e'; // green
+      hasPulse = true;
+    }
+  }
+
+  useEffect(() => {
+    setShowPill(true);
+    if (pillState === 'connected') {
+      const timer = setTimeout(() => setShowPill(false), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [pillState]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   if (!appReady) {
     return (
@@ -1059,6 +1102,35 @@ export default function App() {
         androidLayerType="software"
         mediaCapturePermissionGrantType="grant"
       />
+
+      {/* ── State Pill ── */}
+      {showPill && pillState !== 'disconnected' && (
+        <View style={{
+          position: 'absolute',
+          top: 60,
+          alignSelf: 'center',
+          backgroundColor: pillColor,
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          borderRadius: 20,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          zIndex: 9999,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.3,
+          shadowRadius: 4,
+          elevation: 5,
+        }}>
+          {hasPulse && (
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />
+          )}
+          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>
+            {pillLabel}
+          </Text>
+        </View>
+      )}
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -1784,7 +1856,16 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
     { code: 'es', name: 'Spanish', label: 'Español' },
   ];
 
+  const confirmMessages = {
+    en: "English selected",
+    hi: "हिंदी चुना गया",
+    kn: "ಕನ್ನಡ ಆಯ್ಕೆ ಮಾಡಲಾಗಿದೆ",
+    es: "Español seleccionado"
+  };
+
   const [selected, setSelected] = useState(currentLanguage || null);
+  const [isConfirming, setIsConfirming] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const handleContinue = () => {
     if (!selected) return;
@@ -1792,7 +1873,23 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
     AsyncStorage.setItem('user_language', selected).catch((err) => {
       console.warn('[Storage] Failed to save language:', err);
     });
-    onSelect(selected);
+    
+    setIsConfirming(true);
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    setTimeout(() => {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        onSelect(selected);
+      });
+    }, 1700);
   };
 
   const activeLang = selected || currentLanguage || 'en';
@@ -1840,7 +1937,7 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
             langStyles.langContinueButton,
             !selected && langStyles.langContinueButtonDisabled
           ]}
-          disabled={!selected}
+          disabled={!selected || isConfirming}
           activeOpacity={0.8}
           onPress={handleContinue}
         >
@@ -1850,6 +1947,12 @@ function LanguageSelectionScreen({ onSelect, currentLanguage }) {
           ]}>{localT('continue')}</Text>
         </TouchableOpacity>
       </View>
+
+      {isConfirming && (
+        <Animated.View style={[langStyles.confirmOverlay, { opacity: fadeAnim }]}>
+          <Text style={langStyles.confirmText}>{confirmMessages[selected]}</Text>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -1922,8 +2025,23 @@ const langStyles = StyleSheet.create({
   },
   langCheckmark: {
     color: '#000000',
-    fontSize: 12,
-    fontWeight: '900',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  confirmOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  confirmText: {
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   langFooter: {
     paddingVertical: 20,
