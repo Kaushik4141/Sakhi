@@ -677,6 +677,14 @@ export default function App() {
       updatePttState('idle');
       setIsRecording(false);
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+      
+      // Signal Gemini that the user has finished speaking
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        console.log('[PTT] Sending turnComplete signal to Gemini');
+        wsRef.current.send(JSON.stringify({
+          clientContent: { turnComplete: true }
+        }));
+      }
       return;
     }
 
