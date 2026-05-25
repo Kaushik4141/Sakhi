@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:remote": "CF_D1_REMOTE=1 next dev",
     "build": "next build",
     "start": "next start",
     "db:generate": "drizzle-kit generate",

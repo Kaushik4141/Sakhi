@@ -1,29 +1,74 @@
-import Link from "next/link";
+export const runtime = 'edge';
 
-export default function Home() {
+import { getDb, schema } from "@/db";
+import { eq } from "drizzle-orm";
+import Header from "@/components/Header";
+import CategoriesBar from "@/components/CategoriesBar";
+import HeroCarousel from "@/components/HeroCarousel";
+import ProductCard from "@/components/ProductCard";
+
+export default async function Home() {
+  const db = getDb();
+  
+  // Fetch products and their corresponding artisans
+  const productsWithArtisans = await db
+    .select({
+      product: schema.products,
+      artisan: schema.artisans,
+    })
+    .from(schema.products)
+    .innerJoin(schema.artisans, eq(schema.products.artisanId, schema.artisans.id));
+
   return (
-    <main className="min-h-screen bg-[#f8f5ef] px-6 py-16 text-[#181612]">
-      <section className="mx-auto flex max-w-5xl flex-col gap-8">
-        <div className="max-w-2xl">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#9b3d1f]">
-            Sakhi Marketplace
-          </p>
-          <h1 className="mt-4 text-4xl font-semibold leading-tight sm:text-6xl">
-            Heritage craft storefronts built for artisan-led commerce.
-          </h1>
-          <p className="mt-6 text-lg leading-8 text-[#5f584d]">
-            Browse curated storefronts from independent makers, with authentic
-            craft details and product collections ready for checkout.
-          </p>
+    <main className="min-h-screen bg-black">
+      <Header />
+      <CategoriesBar />
+      <HeroCarousel />
+      
+      <section className="mx-auto max-w-[1400px] px-4 sm:px-6 py-12">
+        <div className="flex items-center justify-between mb-8 border-b border-[#222222] pb-4">
+          <h2 className="text-2xl font-semibold text-white tracking-wide">
+            Top Picks <span className="text-neutral-500 font-normal">for you</span>
+          </h2>
+          <button className="text-sm font-medium text-[#f3d286] hover:text-white transition-colors">
+            View All
+          </button>
+        </div>
+        
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6">
+          {productsWithArtisans.map(({ product, artisan }) => (
+            <ProductCard 
+              key={product.id} 
+              product={product} 
+              artisan={artisan} 
+            />
+          ))}
         </div>
 
-        <Link
-          href="/shop/pottery-jane"
-          className="w-fit rounded-full bg-[#181612] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#3d352a]"
-        >
-          View sample storefront
-        </Link>
+        {productsWithArtisans.length === 0 && (
+          <div className="text-center py-24 text-neutral-500 border-2 border-dashed border-[#222222] rounded-xl">
+            No products found in the database. Run the seed script to populate products!
+          </div>
+        )}
       </section>
+      
+      {/* Footer / Trust badges */}
+      <div className="border-t border-[#222222] bg-[#0a0a0a] mt-12 py-12">
+        <div className="mx-auto max-w-[1400px] px-6 grid grid-cols-1 md:grid-cols-3 gap-8 text-center md:text-left">
+          <div>
+            <h4 className="text-white font-bold mb-3 uppercase tracking-wider text-sm">100% Authentic</h4>
+            <p className="text-sm text-neutral-400">Direct from artisans and weavers.</p>
+          </div>
+          <div>
+            <h4 className="text-white font-bold mb-3 uppercase tracking-wider text-sm">Secure Payments</h4>
+            <p className="text-sm text-neutral-400">Safe and encrypted checkout.</p>
+          </div>
+          <div>
+            <h4 className="text-white font-bold mb-3 uppercase tracking-wider text-sm">GI Verified</h4>
+            <p className="text-sm text-neutral-400">Authentic Geographical Indication products.</p>
+          </div>
+        </div>
+      </div>
     </main>
   );
 }

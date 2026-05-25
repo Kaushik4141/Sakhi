@@ -6,7 +6,9 @@ if (process.env.NODE_ENV === "development") {
   const g = globalThis as unknown as { __devPlatformSetup?: boolean };
   if (!g.__devPlatformSetup) {
     g.__devPlatformSetup = true;
-    setupDevPlatform();
+    setupDevPlatform(
+      process.env.CF_D1_REMOTE === "1" ? { environment: "remote" } : undefined
+    );
   }
 }
 

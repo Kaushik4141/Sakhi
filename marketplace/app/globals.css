@@ -1,103 +1,66 @@
 @import "tailwindcss";
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,700;1,500&display=swap");
 
-:root {
-  color-scheme: light;
-  --color-cream: #f8f5ef;
-  --color-cream-warm: #fffaf0;
-  --color-ink: #181612;
-  --color-ink-muted: #5f584d;
-  --color-ink-subtle: #84786a;
-  --color-border: #e2dcd2;
-  --color-terracotta: #c4501a;
-  --color-terracotta-dark: #8b3517;
-  --color-terracotta-light: #fff1dc;
-  --color-emerald: #166534;
-  --color-emerald-light: #dcfce7;
-  --color-card: #ffffff;
-  --font-heading: "Playfair Display", Georgia, serif;
-  --font-body: "Outfit", system-ui, sans-serif;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent-1: #ffffff;
+  --color-accent-2: #cccccc;
+  --color-surface: rgba(255, 255, 255, 0.05);
+  --color-glass: rgba(10, 10, 10, 0.7);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-mono);
 }
 
-* {
-  box-sizing: border-box;
+:root {
+  --background: #000000;
+  --foreground: #ffffff;
 }
 
 body {
-  margin: 0;
-  background: var(--color-cream);
-  color: var(--color-ink);
-  font-family: var(--font-body);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), sans-serif;
+  overflow-x: hidden;
 }
 
-/* Smooth scroll */
-html {
-  scroll-behavior: smooth;
+/* Glassmorphism utilities */
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: var(--color-cream);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 100px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-ink-subtle);
+.glass-nav {
+  background: rgba(5, 5, 5, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Animations */
-@keyframes fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Text Gradients */
+.text-gradient {
+  background: linear-gradient(to right, #ffffff, #888888);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
+/* Film Grain */
+.bg-noise {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }
 
-@keyframes badge-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(22, 101, 52, 0.15);
-  }
-  50% {
-    box-shadow: 0 0 12px 4px rgba(22, 101, 52, 0.12);
-  }
+/* Bento Grid Tile */
+.bento-tile {
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  overflow: hidden;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-.animate-fade-in-up {
-  animation: fade-in-up 0.6s ease-out both;
+.bento-tile:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 30px rgba(255, 255, 255, 0.03);
 }
-
-.animate-badge-glow {
-  animation: badge-glow 2.5s ease-in-out infinite;
-}
-
-/* Stagger children animations */
-.stagger-children > * {
-  animation: fade-in-up 0.5s ease-out both;
-}
-.stagger-children > *:nth-child(1) { animation-delay: 0.05s; }
-.stagger-children > *:nth-child(2) { animation-delay: 0.12s; }
-.stagger-children > *:nth-child(3) { animation-delay: 0.19s; }
-.stagger-children > *:nth-child(4) { animation-delay: 0.26s; }
-.stagger-children > *:nth-child(5) { animation-delay: 0.33s; }
-.stagger-children > *:nth-child(6) { animation-delay: 0.40s; }

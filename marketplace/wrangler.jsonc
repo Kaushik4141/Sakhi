@@ -1,0 +1,12 @@
+{
+  "name": "sakhi",
+  "compatibility_date": "2024-09-23",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sakhi-db",
+      "database_id": "e737edca-0b7e-4bb0-89b2-f5d48b96ac9f",
+      "migrations_dir": "drizzle/migrations"
+    }
+  ]
+}
