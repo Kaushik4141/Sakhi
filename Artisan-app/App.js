@@ -9,15 +9,130 @@ import {
   StatusBar,
   SafeAreaView,
   Platform,
+  NativeModules,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system/legacy';
+import { WebView } from 'react-native-webview';
 
 // ─── WebSocket Config ──────────────────────────────────────────────────────────
-const WS_URL = 'ws://localhost:8787/ws';
+function getDevServerHost() {
+  const scriptURL = NativeModules.SourceCode?.scriptURL;
+  const match = scriptURL?.match(/^[a-z]+:\/\/([^/:]+)/i);
+  return match?.[1];
+}
+
+const WS_HOST =
+  Platform.OS === 'android' && getDevServerHost() === 'localhost'
+    ? '10.0.2.2'
+    : getDevServerHost() || '172.25.9.169';
+const WS_URL = `ws://${WS_HOST}:8787/ws`;
 const DUMMY_ARTISAN_ID = 'artisan_demo_001';
 const WS_RECONNECT_DELAY_MS = 3000;
+const APP_DEBUG_BUILD = 'ws-debug-2026-05-25-01';
+
+const PCM_RECORDER_HTML = `
+<!DOCTYPE html>
+<html>
+  <body>
+    <script>
+      let audioContext;
+      let processor;
+      let source;
+      let stream;
+      let isRecording = false;
+
+      function postMessage(payload) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+      }
+
+      async function startRecording() {
+        if (isRecording) return;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              sampleRate: 16000,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+
+          audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+          source = audioContext.createMediaStreamSource(stream);
+          processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+          processor.onaudioprocess = function(event) {
+            if (!isRecording) return;
+            const float32 = event.inputBuffer.getChannelData(0);
+            const int16 = new Int16Array(float32.length);
+            for (let i = 0; i < float32.length; i += 1) {
+              const sample = Math.max(-1, Math.min(1, float32[i]));
+              int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+            }
+
+            const bytes = new Uint8Array(int16.buffer);
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+              const chunk = bytes.subarray(i, i + chunkSize);
+              binary += String.fromCharCode.apply(null, chunk);
+            }
+
+            postMessage({ type: 'pcm_chunk', data: btoa(binary) });
+          };
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+          isRecording = true;
+          postMessage({ type: 'recording_started' });
+        } catch (error) {
+          postMessage({ type: 'recording_error', message: error && error.message ? error.message : String(error) });
+          stopRecording();
+        }
+      }
+
+      function stopRecording() {
+        if (!isRecording && !stream && !audioContext) return;
+        isRecording = false;
+        if (processor) {
+          processor.disconnect();
+          processor.onaudioprocess = null;
+          processor = null;
+        }
+        if (source) {
+          source.disconnect();
+          source = null;
+        }
+        if (stream) {
+          stream.getTracks().forEach(function(track) { track.stop(); });
+          stream = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+        }
+        postMessage({ type: 'recording_stopped' });
+      }
+
+      function handleCommand(event) {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.command === 'start') startRecording();
+          if (message.command === 'stop') stopRecording();
+        } catch (error) {
+          postMessage({ type: 'recording_error', message: error && error.message ? error.message : String(error) });
+        }
+      }
+
+      document.addEventListener('message', handleCommand);
+      window.addEventListener('message', handleCommand);
+      postMessage({ type: 'recorder_ready' });
+    </script>
+  </body>
+</html>
+`;
 
 // ─── WebSocket Status ──────────────────────────────────────────────────────────
 const WS_STATUS = {
@@ -29,12 +144,116 @@ const WS_STATUS = {
   CLOSED:     'closed',
 };
 
+const WS_READY_STATE_LABELS = {
+  [WebSocket.CONNECTING]: 'CONNECTING',
+  [WebSocket.OPEN]: 'OPEN',
+  [WebSocket.CLOSING]: 'CLOSING',
+  [WebSocket.CLOSED]: 'CLOSED',
+};
+
+function getWsReadyStateLabel(ws) {
+  if (!ws) return 'NO_SOCKET';
+  return WS_READY_STATE_LABELS[ws.readyState] || `UNKNOWN(${ws.readyState})`;
+}
+
+function describeWsEvent(event) {
+  if (!event) return 'no event object';
+  const details = {
+    type: event.type,
+    message: event.message,
+    code: event.code,
+    reason: event.reason,
+    wasClean: event.wasClean,
+    readyState: event.target?.readyState,
+  };
+  return JSON.stringify(details);
+}
+
 // ─── Permission Status Enum ────────────────────────────────────────────────────
 const PERM_STATUS = {
   UNDETERMINED: 'undetermined',
   GRANTED: 'granted',
   DENIED: 'denied',
 };
+
+// ─── Recording Options ─────────────────────────────────────────────────────────
+const recordingOptions = {
+  android: {
+    extension: '.m4a',
+    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+    audioEncoder: Audio.AndroidAudioEncoder.AAC,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 64000,
+  },
+  ios: {
+    extension: '.m4a',
+    outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+    audioQuality: Audio.IOSAudioQuality.HIGH,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 64000,
+  },
+  web: {}
+};
+
+// Transforms raw 24kHz Mono PCM base64 data into a playable WAV data URI
+function createWavDataUri(base64Pcm) {
+  // Decode base64 to byte array
+  let pcmBuffer;
+  if (global.Buffer) {
+    pcmBuffer = Buffer.from(base64Pcm, 'base64');
+  } else {
+    // Fallback: decode base64 using atob
+    const binaryString = atob(base64Pcm);
+    pcmBuffer = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      pcmBuffer[i] = binaryString.charCodeAt(i);
+    }
+  }
+
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  /* RIFF identifier */
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36 + pcmBuffer.length, true); // file length
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+  /* Format chunk identifier */
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true); // sample format length
+  view.setUint16(20, 1, true); // PCM format = 1
+  view.setUint16(22, 1, true); // Channels = 1 (Mono)
+  view.setUint32(24, 24000, true); // Sample Rate = 24kHz
+  view.setUint32(28, 24000 * 2, true); // Byte Rate
+  view.setUint16(32, 2, true); // Block Align
+  view.setUint16(34, 16, true); // Bits per Sample = 16
+  /* Data chunk identifier */
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, pcmBuffer.length, true); // chunk length
+
+  // Merge header and PCM bytes into a single payload
+  const wavBytes = new Uint8Array(44 + pcmBuffer.length);
+  wavBytes.set(new Uint8Array(header), 0);
+  wavBytes.set(pcmBuffer, 44);
+
+  // Encode merged bytes back to base64
+  let base64Wav;
+  if (global.Buffer) {
+    base64Wav = Buffer.from(wavBytes).toString('base64');
+  } else {
+    // Fallback: encode using btoa
+    let binary = '';
+    const len = wavBytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(wavBytes[i]);
+    }
+    base64Wav = btoa(binary);
+  }
+
+  // Return the playable data URI string
+  return `data:audio/wav;base64,${base64Wav}`;
+}
 
 // ─── Denied Screen ─────────────────────────────────────────────────────────────
 function PermissionDeniedScreen({ type, onRetry }) {
@@ -129,29 +348,47 @@ export default function App() {
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
-  const recordingRef = useRef(null);
+  const [pttState, setPttState] = useState('idle');
+  const pttStateRef = useRef('idle');
+  const recorderWebViewRef = useRef(null);
+  const recorderReadyRef = useRef(false);
+  const pcmChunkCountRef = useRef(0);
+  const stopRequestedDuringStartRef = useRef(false);
 
   // WebSocket
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
+  const wsAttemptRef = useRef(0);
   const [wsStatus, setWsStatus] = useState(WS_STATUS.CLOSED);
 
   // Button animation
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
+  const updatePttState = useCallback((nextState) => {
+    pttStateRef.current = nextState;
+    setPttState(nextState);
+  }, []);
+
   // ── WebSocket: Connect ────────────────────────────────────────────────────
   const connectWebSocket = useCallback(() => {
     // Don't open a second socket if one is already live
-    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
-
-    console.log('[WS] Connecting to', WS_URL);
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
+      console.log('[WS] Connect skipped; existing socket state:', getWsReadyStateLabel(wsRef.current));
+      return;
+    }
+    const attemptId = wsAttemptRef.current + 1;
+    wsAttemptRef.current = attemptId;
+    console.log(`[APP] Debug build: ${APP_DEBUG_BUILD}`);
+    console.log(`[WS:${attemptId}] Connecting to ${WS_URL}`);
     setWsStatus(WS_STATUS.CONNECTING);
 
     const ws = new WebSocket(WS_URL);
+    // Force binary messages to arrive as ArrayBuffer, not Blob
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-      console.log('[WS] Connected');
+      console.log(`[WS:${attemptId}] Connected. State:`, getWsReadyStateLabel(ws));
       setWsStatus(WS_STATUS.CONNECTED);
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
@@ -159,17 +396,73 @@ export default function App() {
       }
     };
 
-    ws.onmessage = (event) => {
-      console.log('[WS] Message received:', event.data);
+    ws.onmessage = async (event) => {
+      try {
+        const dataType = typeof event.data;
+        const dataSize =
+          dataType === 'string'
+            ? event.data.length
+            : event.data?.byteLength || event.data?.size || 'unknown';
+        console.log(`[WS:${attemptId}] Message received. type=${dataType}, size=${dataSize}`);
+        // Decode to string — handle both text frames and any residual binary frames
+        let rawData;
+        if (typeof event.data === 'string') {
+          rawData = event.data;
+        } else if (event.data instanceof ArrayBuffer) {
+          rawData = new TextDecoder().decode(event.data);
+        } else {
+          // Last resort: Blob or unknown type
+          rawData = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsText(event.data);
+          });
+        }
+
+        const response = JSON.parse(rawData);
+        console.log('[WS] Parsed message keys:', Object.keys(response));
+
+        // Drill down to locate Gemini's audio output blocks
+        const parts = response.serverContent?.modelTurn?.parts;
+        if (parts) {
+          for (const part of parts) {
+            if (part.inlineData && part.inlineData.mimeType.includes('audio/pcm')) {
+              const rawBase64Pcm = part.inlineData.data;
+              
+              // Generate the playable asset
+              const wavUri = createWavDataUri(rawBase64Pcm);
+              
+              // Play the voice slice instantly through expo-av
+              const { sound } = await Audio.Sound.createAsync(
+                { uri: wavUri },
+                { shouldPlay: true }
+              );
+              
+              // Automatically clean up memory when the chunk finishes playing
+              sound.setOnPlaybackStatusUpdate((status) => {
+                if (status.isLoaded && status.didJustFinish) {
+                  sound.unloadAsync();
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.log('[WS] Non-audio message or parse error:', err?.message || err);
+      }
     };
 
     ws.onerror = (err) => {
-      console.warn('[WS] Error:', err.message);
+      console.warn(`[WS:${attemptId}] Error event:`, describeWsEvent(err));
+      console.warn(`[WS:${attemptId}] State after error:`, getWsReadyStateLabel(ws));
       setWsStatus(WS_STATUS.ERROR);
     };
 
     ws.onclose = (event) => {
-      console.log('[WS] Closed. Code:', event.code);
+      console.log(
+        `[WS:${attemptId}] Closed. code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean}, state=${getWsReadyStateLabel(ws)}`
+      );
       setWsStatus(WS_STATUS.CLOSED);
       // Auto-reconnect after delay
       reconnectTimer.current = setTimeout(() => {
@@ -194,51 +487,90 @@ export default function App() {
    *     timestamp:   "<ISO 8601>"
    *   }
    */
-  const sendAudioPayload = useCallback(async (uri) => {
-    if (!uri) {
-      console.warn('[WS] No URI provided — skipping send');
-      return;
-    }
-
-    // Read file as base64
-    let base64Audio;
-    try {
-      base64Audio = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-    } catch (fsErr) {
-      console.error('[FS] Failed to read audio file:', fsErr);
-      setWsStatus(WS_STATUS.ERROR);
-      return;
-    }
-
-    const payload = JSON.stringify({
-      event: 'user_audio',
-      data: base64Audio,
-    });
-
+  const sendPcmChunk = useCallback((base64PCM) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn('[WS] Socket not open — payload dropped. Will reconnect.');
+      console.warn(
+        `[WS] Socket not open. state=${getWsReadyStateLabel(ws)}, pcmChunkKb=${(base64PCM.length / 1024).toFixed(1)}. Chunk dropped.`
+      );
       setWsStatus(WS_STATUS.ERROR);
       connectWebSocket();
       return;
     }
 
     try {
-      setWsStatus(WS_STATUS.SENDING);
-      ws.send(payload);
-      console.log(`[WS] Sent audio payload (${(base64Audio.length / 1024).toFixed(1)} KB base64)`);
-      setWsStatus(WS_STATUS.SENT);
-      // Reset to CONNECTED after brief visual feedback
-      setTimeout(() => setWsStatus(WS_STATUS.CONNECTED), 1500);
+      ws.send(JSON.stringify({
+        realtimeInput: {
+          mediaChunks: [
+            {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64PCM,
+            },
+          ],
+        },
+      }));
+
+      pcmChunkCountRef.current += 1;
+      if (pcmChunkCountRef.current === 1 || pcmChunkCountRef.current % 25 === 0) {
+        console.log(
+          `[WS] Sent PCM chunk #${pcmChunkCountRef.current} (${(base64PCM.length / 1024).toFixed(1)} KB, audio/pcm;rate=16000)`
+        );
+      }
     } catch (sendErr) {
-      console.error('[WS] Failed to send:', sendErr);
+      console.error('[WS] Failed to send PCM chunk:', sendErr);
       setWsStatus(WS_STATUS.ERROR);
     }
   }, [connectWebSocket]);
 
-  // ── Request Microphone Permission ──────────────────────────────────────────
+  const handleRecorderMessage = useCallback((event) => {
+    let message;
+    try {
+      message = JSON.parse(event.nativeEvent.data);
+    } catch (err) {
+      console.warn('[PTT] Invalid recorder message:', event.nativeEvent.data);
+      return;
+    }
+
+    if (message.type === 'recorder_ready') {
+      recorderReadyRef.current = true;
+      console.log('[PTT] WebView PCM recorder ready');
+      return;
+    }
+
+    if (message.type === 'recording_started') {
+      updatePttState('recording');
+      setIsRecording(true);
+      console.log('[PTT] WebView PCM recording started');
+      Animated.spring(scaleAnim, { toValue: 0.92, useNativeDriver: true }).start();
+      if (stopRequestedDuringStartRef.current) {
+        recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop' }));
+      }
+      return;
+    }
+
+    if (message.type === 'recording_stopped') {
+      console.log(`[PTT] WebView PCM recording stopped after ${pcmChunkCountRef.current} chunks`);
+      stopRequestedDuringStartRef.current = false;
+      updatePttState('idle');
+      setIsRecording(false);
+      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+      return;
+    }
+
+    if (message.type === 'recording_error') {
+      console.warn('[PTT] WebView PCM recorder error:', message.message);
+      stopRequestedDuringStartRef.current = false;
+      updatePttState('idle');
+      setIsRecording(false);
+      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+      return;
+    }
+
+    if (message.type === 'pcm_chunk') {
+      sendPcmChunk(message.data);
+    }
+  }, [scaleAnim, sendPcmChunk, updatePttState]);
+
   const requestMicPermission = useCallback(async () => {
     const { status } = await Audio.requestPermissionsAsync();
     setMicStatus(status === 'granted' ? PERM_STATUS.GRANTED : PERM_STATUS.DENIED);
@@ -263,6 +595,7 @@ export default function App() {
     // Cleanup on unmount
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop' }));
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
@@ -283,40 +616,34 @@ export default function App() {
 
   // ── Push to Talk: Start ───────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
+    console.log('[PTT] Start requested. micStatus:', micStatus, 'state:', pttStateRef.current);
     if (micStatus !== PERM_STATUS.GRANTED) return;
-    try {
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await recording.startAsync();
-      recordingRef.current = recording;
-      setIsRecording(true);
-      Animated.spring(scaleAnim, { toValue: 0.92, useNativeDriver: true }).start();
-    } catch (err) {
-      console.warn('[PTT] Failed to start recording:', err);
+    if (pttStateRef.current !== 'idle') {
+      console.warn('[PTT] Start ignored because recorder is not idle.');
+      return;
     }
-  }, [micStatus, scaleAnim]);
+
+    stopRequestedDuringStartRef.current = false;
+    pcmChunkCountRef.current = 0;
+    updatePttState('starting');
+    recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'start' }));
+    if (!recorderReadyRef.current) {
+      console.warn('[PTT] Start sent before WebView recorder reported ready.');
+    }
+  }, [micStatus, updatePttState]);
 
   // ── Push to Talk: Stop → Read → Send ─────────────────────────────────────
   const stopRecording = useCallback(async () => {
-    if (!recordingRef.current) return;
-    let uri = null;
-    try {
-      await recordingRef.current.stopAndUnloadAsync();
-      uri = recordingRef.current.getURI();
-      console.log('[PTT] Recording saved to:', uri);
-      recordingRef.current = null;
-    } catch (err) {
-      console.warn('[PTT] Failed to stop recording:', err);
-      recordingRef.current = null;
-    } finally {
-      setIsRecording(false);
-      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
+    console.log('[PTT] Stop requested. state:', pttStateRef.current);
+    if (pttStateRef.current === 'starting') {
+      stopRequestedDuringStartRef.current = true;
+      return;
     }
-    // Read file + send via WebSocket (runs after UI updates)
-    if (uri) {
-      await sendAudioPayload(uri);
-    }
-  }, [scaleAnim, sendAudioPayload]);
+    if (pttStateRef.current !== 'recording') return;
+
+    updatePttState('stopping');
+    recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop' }));
+  }, [updatePttState]);
 
   // ── Derived Permission States ─────────────────────────────────────────────
   const cameraGranted = cameraPermission?.granted;
@@ -325,6 +652,7 @@ export default function App() {
 
   const micGranted = micStatus === PERM_STATUS.GRANTED;
   const micDenied = micStatus === PERM_STATUS.DENIED;
+  const isPttTransitioning = pttState === 'starting' || pttState === 'stopping';
 
   // ── WS Status Badge config ────────────────────────────────────────────────
   const wsStatusConfig = {
@@ -341,6 +669,19 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#0A0A14" />
+      <WebView
+        ref={recorderWebViewRef}
+        source={{ html: PCM_RECORDER_HTML, baseUrl: 'https://localhost' }}
+        onMessage={handleRecorderMessage}
+        mediaPlaybackRequiresUserAction={false}
+        allowsInlineMediaPlayback
+        originWhitelist={['*']}
+        javaScriptEnabled
+        domStorageEnabled
+        style={styles.recorderWebView}
+        androidLayerType="software"
+        mediaCapturePermissionGrantType="grant"
+      />
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -393,7 +734,7 @@ export default function App() {
         ) : (
           <>
             <Text style={styles.hint}>
-              {isRecording ? 'Release to stop' : 'Hold to speak'}
+              {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Release to stop' : 'Hold to speak'}
             </Text>
 
             <WaveformBars isRecording={isRecording} />
@@ -413,13 +754,14 @@ export default function App() {
             <Pressable
               onPressIn={startRecording}
               onPressOut={stopRecording}
-              disabled={!micGranted}
+              disabled={!micGranted || isPttTransitioning}
               style={({ pressed }) => [styles.pttButtonWrapper]}
             >
               <Animated.View
                 style={[
                   styles.pttButton,
                   isRecording && styles.pttButtonActive,
+                  isPttTransitioning && styles.pttButtonTransitioning,
                   { transform: [{ scale: scaleAnim }] },
                 ]}
               >
@@ -458,6 +800,12 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: BG,
+  },
+  recorderWebView: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
   },
 
   // Header
@@ -701,6 +1049,9 @@ const styles = StyleSheet.create({
     shadowColor: PINK,
     shadowOpacity: 0.9,
     shadowRadius: 30,
+  },
+  pttButtonTransitioning: {
+    opacity: 0.7,
   },
   pttIcon: {
     fontSize: 42,
