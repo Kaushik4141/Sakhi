@@ -122,21 +122,9 @@ const PCM_RECORDER_HTML = `
       }
 
 // ─── PLAYBACK ────────────────────────────────────────────────
-      let playQueue = [];
-      let isPlaying = false;
       let playContext;
       const PLAYBACK_SAMPLE_RATE = 24000;
-
-      function playNextChunk() {
-        if (playQueue.length === 0) { isPlaying = false; return; }
-        isPlaying = true;
-        const buffer = playQueue.shift();
-        const sourceNode = playContext.createBufferSource();
-        sourceNode.buffer = buffer;
-        sourceNode.connect(playContext.destination);
-        sourceNode.onended = playNextChunk;
-        sourceNode.start();
-      }
+      let nextScheduledTime = 0;
 
       function receiveAudioChunk(base64) {
         if (!playContext) {
@@ -156,14 +144,23 @@ const PCM_RECORDER_HTML = `
         const audioBuffer = playContext.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
         audioBuffer.copyToChannel(float32, 0);
         
-        playQueue.push(audioBuffer);
-        if (!isPlaying) playNextChunk();
+        // Schedule playback for seamless audio
+        if (nextScheduledTime < playContext.currentTime) {
+          // Buffer underrun or first chunk - add 150ms jitter buffer
+          nextScheduledTime = playContext.currentTime + 0.15;
+        }
+
+        const sourceNode = playContext.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.connect(playContext.destination);
+        sourceNode.start(nextScheduledTime);
+
+        // Advance the schedule time
+        nextScheduledTime += audioBuffer.duration;
       }
 
       function stopPlayback() {
-        playQueue = [];
-        isPlaying = false;
-        // Optionally, close playContext to stop current audio immediately
+        nextScheduledTime = 0;
         if (playContext) {
           playContext.close();
           playContext = null;
