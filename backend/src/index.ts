@@ -407,6 +407,20 @@ app.get('/ws', async (c) => {
             return // Intercept: do not forward this toolCall to client
           }
         }
+
+        // Log Gemini Text and Audio responses
+        if (payload.serverContent?.modelTurn?.parts) {
+          for (const part of payload.serverContent.modelTurn.parts) {
+            if (part.text) {
+              const preview = part.text.length > 50 ? part.text.substring(0, 50) + '...' : part.text
+              console.log(`[WS:${requestId}] Gemini sent TEXT: ${preview}`)
+            }
+            if (part.inlineData && part.inlineData.mimeType?.includes('audio/pcm')) {
+              console.log(`[WS:${requestId}] Gemini sent AUDIO chunk: ${part.inlineData.data?.length} bytes`)
+            }
+          }
+        }
+
       }
     } catch (e) {
       console.error(`[WS:${requestId}] Error parsing Gemini message:`, e)
