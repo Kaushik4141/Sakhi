@@ -121,11 +121,62 @@ const PCM_RECORDER_HTML = `
         postMessage({ type: 'recording_stopped' });
       }
 
+// ─── PLAYBACK ────────────────────────────────────────────────
+      let playQueue = [];
+      let isPlaying = false;
+      let playContext;
+      const PLAYBACK_SAMPLE_RATE = 24000;
+
+      function playNextChunk() {
+        if (playQueue.length === 0) { isPlaying = false; return; }
+        isPlaying = true;
+        const buffer = playQueue.shift();
+        const sourceNode = playContext.createBufferSource();
+        sourceNode.buffer = buffer;
+        sourceNode.connect(playContext.destination);
+        sourceNode.onended = playNextChunk;
+        sourceNode.start();
+      }
+
+      function receiveAudioChunk(base64) {
+        if (!playContext) {
+          playContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PLAYBACK_SAMPLE_RATE });
+        }
+        
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        
+        const int16 = new Int16Array(bytes.buffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+          float32[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7FFF);
+        }
+        
+        const audioBuffer = playContext.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
+        audioBuffer.copyToChannel(float32, 0);
+        
+        playQueue.push(audioBuffer);
+        if (!isPlaying) playNextChunk();
+      }
+
+      function stopPlayback() {
+        playQueue = [];
+        isPlaying = false;
+        // Optionally, close playContext to stop current audio immediately
+        if (playContext) {
+          playContext.close();
+          playContext = null;
+        }
+      }
+
       function handleCommand(event) {
         try {
           const message = JSON.parse(event.data);
           if (message.command === 'start') startRecording();
           if (message.command === 'stop') stopRecording();
+          if (message.command === 'play_chunk') receiveAudioChunk(message.data);
+          if (message.command === 'stop_playback') stopPlayback();
         } catch (error) {
           postMessage({ type: 'recording_error', message: error && error.message ? error.message : String(error) });
         }
@@ -202,63 +253,6 @@ const recordingOptions = {
   web: {}
 };
 
-// Transforms raw 24kHz Mono PCM base64 data into a playable WAV data URI
-function createWavDataUri(base64Pcm) {
-  // Decode base64 to byte array
-  let pcmBuffer;
-  if (global.Buffer) {
-    pcmBuffer = Buffer.from(base64Pcm, 'base64');
-  } else {
-    // Fallback: decode base64 using atob
-    const binaryString = atob(base64Pcm);
-    pcmBuffer = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      pcmBuffer[i] = binaryString.charCodeAt(i);
-    }
-  }
-
-  const header = new ArrayBuffer(44);
-  const view = new DataView(header);
-
-  /* RIFF identifier */
-  view.setUint32(0, 0x52494646, false); // "RIFF"
-  view.setUint32(4, 36 + pcmBuffer.length, true); // file length
-  view.setUint32(8, 0x57415645, false); // "WAVE"
-  /* Format chunk identifier */
-  view.setUint32(12, 0x666d7420, false); // "fmt "
-  view.setUint32(16, 16, true); // sample format length
-  view.setUint16(20, 1, true); // PCM format = 1
-  view.setUint16(22, 1, true); // Channels = 1 (Mono)
-  view.setUint32(24, 24000, true); // Sample Rate = 24kHz
-  view.setUint32(28, 24000 * 2, true); // Byte Rate
-  view.setUint16(32, 2, true); // Block Align
-  view.setUint16(34, 16, true); // Bits per Sample = 16
-  /* Data chunk identifier */
-  view.setUint32(36, 0x64617461, false); // "data"
-  view.setUint32(40, pcmBuffer.length, true); // chunk length
-
-  // Merge header and PCM bytes into a single payload
-  const wavBytes = new Uint8Array(44 + pcmBuffer.length);
-  wavBytes.set(new Uint8Array(header), 0);
-  wavBytes.set(pcmBuffer, 44);
-
-  // Encode merged bytes back to base64
-  let base64Wav;
-  if (global.Buffer) {
-    base64Wav = Buffer.from(wavBytes).toString('base64');
-  } else {
-    // Fallback: encode using btoa
-    let binary = '';
-    const len = wavBytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(wavBytes[i]);
-    }
-    base64Wav = btoa(binary);
-  }
-
-  // Return the playable data URI string
-  return `data:audio/wav;base64,${base64Wav}`;
-}
 
 // ─── Denied Screen ─────────────────────────────────────────────────────────────
 function PermissionDeniedScreen({ type, onRetry }) {
@@ -393,21 +387,11 @@ export default function App() {
             if (part.inlineData && part.inlineData.mimeType.includes('audio/pcm')) {
               const rawBase64Pcm = part.inlineData.data;
               
-              // Generate the playable asset
-              const wavUri = createWavDataUri(rawBase64Pcm);
-              
-              // Play the voice slice instantly through expo-av
-              const { sound } = await Audio.Sound.createAsync(
-                { uri: wavUri },
-                { shouldPlay: true }
-              );
-              
-              // Automatically clean up memory when the chunk finishes playing
-              sound.setOnPlaybackStatusUpdate((status) => {
-                if (status.isLoaded && status.didJustFinish) {
-                  sound.unloadAsync();
-                }
-              });
+              // Play the voice slice instantly via the WebView's AudioContext
+              recorderWebViewRef.current?.postMessage(JSON.stringify({ 
+                command: 'play_chunk', 
+                data: rawBase64Pcm 
+              }));
             }
           }
         }
@@ -747,6 +731,8 @@ export default function App() {
   // ── Push to Talk: Start ───────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
     console.log('[PTT] Start requested. micStatus:', micStatus, 'state:', pttStateRef.current);
+    // Stop any ongoing playback
+    recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop_playback' }));
     if (micStatus !== PERM_STATUS.GRANTED) return;
     if (pttStateRef.current !== 'idle') {
       console.warn('[PTT] Start ignored because recorder is not idle.');
