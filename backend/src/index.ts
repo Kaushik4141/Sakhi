@@ -1,13 +1,14 @@
 import { Hono } from 'hono'
-
+import { neon } from '@neondatabase/serverless'
 import { Redis } from '@upstash/redis'
-import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile } from './db/db-operations'
+import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock } from './db/db-operations'
 import { artisans } from './db/schema'
 import { runTestFlow } from './db/test-db'
 
 type Bindings = {
   GEMINI_API_KEY: string
   DB: D1Database
+  DATABASE_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
 }
@@ -133,7 +134,7 @@ app.get('/ws', async (c) => {
       prompt += `Start by greeting them warmly ("${lang.greeting}!") and explain that you will help them set up their shop.\n\n`
       prompt += `Ask these questions ONE AT A TIME, waiting for the user's answer before moving to the next:\n`
       prompt += `1. Ask for her name\n`
-      prompt += `2. Ask for her village or district\n`
+      prompt += `2. Ask for her district\n`
       prompt += `3. Ask what she makes (her craft type — e.g., pottery, weaving, embroidery)\n`
       prompt += `4. Ask how long she has been making it (experience in years)\n\n`
       prompt += `After collecting ALL FOUR answers, confirm the details back to her in ${lang.name} and say "Your shop is being set up!" `
@@ -203,7 +204,7 @@ app.get('/ws', async (c) => {
               },
               {
                 name: 'create_artisan_profile',
-                description: 'Create a new artisan profile after onboarding. Called after collecting name, village, craft type, and experience.',
+                description: 'Create a new artisan profile after onboarding. Called after collecting name, district, craft type, and experience.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
@@ -211,9 +212,9 @@ app.get('/ws', async (c) => {
                       type: 'STRING',
                       description: 'The full name of the artisan.'
                     },
-                    village: {
+                    district: {
                       type: 'STRING',
-                      description: 'The village or district where the artisan lives.'
+                      description: 'The district where the artisan lives.'
                     },
                     craft_type: {
                       type: 'STRING',
@@ -224,7 +225,7 @@ app.get('/ws', async (c) => {
                       description: 'How long the artisan has been practicing their craft (e.g., "5 years", "10 years").'
                     }
                   },
-                  required: ['name', 'village', 'craft_type', 'experience_years']
+                  required: ['name', 'district', 'craft_type', 'experience_years']
                 }
               }
             ]
@@ -527,35 +528,56 @@ app.get('/ws', async (c) => {
           if (createProfileCalls.length > 0) {
             for (const call of createProfileCalls) {
               const { id, args } = call
-              const name = args?.name
-              const village = args?.village
+              const artisanName = args?.name
+              const district = args?.district
               const craftType = args?.craft_type
               const experienceYears = args?.experience_years
               
-              let message = ''
+              let toolMessage = ''
               let success = false
+              let shopSlug = ''
+              let artisanId = ''
               
               try {
-                const result = await createArtisanProfile(c.env.DB, name, village, craftType, experienceYears)
-                
-                if (result.success) {
+                // Generate slug: lowercase name, spaces→hyphens, append 4 random digits
+                const randomSuffix = Math.floor(1000 + Math.random() * 9000)
+                shopSlug = artisanName
+                  .toLowerCase()
+                  .trim()
+                  .replace(/[^a-z0-9\s]/g, '')
+                  .replace(/\s+/g, '-')
+                  + '-' + randomSuffix
+
+                // Insert into Neon PostgreSQL
+                const sql = neon(c.env.DATABASE_URL)
+                const rows = await sql`
+                  INSERT INTO artisans (name, district, craft_type, shop_slug, language)
+                  VALUES (${artisanName}, ${district}, ${craftType}, ${shopSlug}, ${sessionLanguage})
+                  RETURNING id, shop_slug
+                `
+
+                if (rows.length > 0) {
+                  artisanId = rows[0].id
+                  shopSlug = rows[0].shop_slug
                   success = true
-                  message = `Artisan profile for '${name}' created successfully! Shop slug: ${result.artisan?.shopSlug}`
-                  console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${result.artisan?.id}, Shop = ${result.artisan?.shopSlug}`)
-                  
-                  // Send the new artisan ID back to the client so they can store it
+                  const shopUrl = `https://kalamitra.in/shop/${shopSlug}`
+                  toolMessage = `Artisan profile created successfully! Shop URL: ${shopUrl}`
+                  console.log(`[WS:${requestId}] ONBOARDING SUCCESS: ID=${artisanId}, slug=${shopSlug}`)
+
+                  // Notify the client app so it can persist the artisan ID
                   server.send(JSON.stringify({
                     type: 'artisan_created',
-                    artisanId: result.artisan?.id,
-                    shopSlug: result.artisan?.shopSlug,
+                    artisanId,
+                    shopSlug,
+                    shopUrl,
                   }))
                 } else {
-                  message = `Failed to create artisan profile: ${result.error}`
-                  console.error(`[WS:${requestId}] ONBOARDING FAILED: ${result.error}`)
+                  toolMessage = 'Insert returned no rows.'
+                  console.error(`[WS:${requestId}] ONBOARDING FAILED: no rows returned`)
                 }
               } catch (dbErr: any) {
-                message = `Database transaction error: ${dbErr.message}`
-                console.error(`[WS:${requestId}] Database error during onboarding:`, dbErr)
+                toolMessage = `Database error: ${dbErr.message}`
+                console.error(`[WS:${requestId}] Neon DB error during onboarding:`, dbErr)
               }
               
               const responsePayload = {
@@ -567,7 +589,8 @@ app.get('/ws', async (c) => {
                       response: {
                         output: {
                           success,
-                          message
+                          message: toolMessage,
+                          shop_url: success ? `https://kalamitra.in/shop/${shopSlug}` : undefined
                         }
                       }
                     }
