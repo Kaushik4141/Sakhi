@@ -1,17 +1,61 @@
 import { Hono } from 'hono'
 
+import { Redis } from '@upstash/redis'
 import { insertProduct, getDrizzle } from './db/db-operations'
 import { artisans } from './db/schema'
+import { runTestFlow } from './db/test-db'
 
 type Bindings = {
   GEMINI_API_KEY: string
   DB: D1Database
+  UPSTASH_REDIS_REST_URL: string
+  UPSTASH_REDIS_REST_TOKEN: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/', (c) => {
   return c.text('Gemini Live API WebSocket Proxy is running!')
+})
+
+class MockRedis {
+  private store = new Map<string, any>()
+  async get(key: string) {
+    return this.store.get(key) || null
+  }
+  async set(key: string, value: any) {
+    this.store.set(key, value)
+    return 'OK'
+  }
+}
+
+app.get('/test-db-flow', async (c) => {
+  try {
+    const url = c.env.UPSTASH_REDIS_REST_URL
+    const token = c.env.UPSTASH_REDIS_REST_TOKEN
+
+    let redis: any
+    let usingMockRedis = false
+
+    if (!url || !token) {
+      console.warn("UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN is missing. Using Mock In-Memory Redis fallback.")
+      redis = new MockRedis()
+      usingMockRedis = true
+    } else {
+      redis = new Redis({ url, token })
+    }
+
+    const result = await runTestFlow(c.env.DB, redis)
+    return c.json({
+      ...result,
+      usingMockRedis
+    })
+  } catch (err: any) {
+    return c.json({
+      success: false,
+      error: err.message
+    }, 500)
+  }
 })
 
 app.get('/ws', async (c) => {
