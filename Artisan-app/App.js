@@ -7,12 +7,12 @@ import {
   Pressable,
   Animated,
   StatusBar,
-  SafeAreaView,
   Platform,
   NativeModules,
   Dimensions,
   Easing,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { WebView } from 'react-native-webview';
@@ -854,8 +854,6 @@ export default function App() {
             <Text style={styles.hint}>
               {isPttTransitioning ? 'Preparing audio' : isRecording ? 'Release to stop' : 'Hold to speak'}
             </Text>
-
-            <WaveformBars isRecording={isRecording} />
 
             {/* Outer glow ring */}
             <Animated.View
