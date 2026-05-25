@@ -433,6 +433,10 @@ export default function App() {
         connectWebSocket();
       }, WS_RECONNECT_DELAY_MS);
     };
+
+    wsRef.current = ws;
+  }, []);
+
   // ── Waveform setup ──
   const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -843,7 +847,7 @@ export default function App() {
 
       {/* ── Bottom Half: Push to Talk ── */}
       <View style={styles.bottomSection}>
-        {micDenied && (
+        {micDenied ? (
           <PermissionDeniedScreen type="microphone" onRetry={requestMicPermission} />
         ) : (
           <>
