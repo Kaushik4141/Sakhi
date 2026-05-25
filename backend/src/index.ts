@@ -139,9 +139,20 @@ app.get('/ws', async (c) => {
   let sessionLanguage = 'english'
   let sessionArtisanId = ''
   const clientMessageQueue: string[] = []
+  const sessionMemory: string[] = []
+
+  // Initialize Redis for Recent Turn Memory
+  const redisUrl = c.env.UPSTASH_REDIS_REST_URL
+  const redisToken = c.env.UPSTASH_REDIS_REST_TOKEN
+  let redisClient: any = null
+  if (redisUrl && redisToken) {
+    redisClient = new Redis({ url: redisUrl, token: redisToken })
+  } else {
+    console.warn(`[WS:${requestId}] Redis credentials missing. Recent Turn Memory disabled.`)
+  }
 
   // ── Language-aware system prompt builder ──────────────────────────────────
-  function buildSystemPrompt(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any): string {
+  function buildSystemPrompt(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any, recentMemory?: string[]): string {
     const langMap: Record<string, { name: string; greeting: string }> = {
       kannada:  { name: 'Kannada', greeting: 'ನಮಸ್ಕಾರ' },
       hindi:    { name: 'Hindi',   greeting: 'नमस्ते' },
@@ -186,14 +197,24 @@ app.get('/ws', async (c) => {
         prompt += `- Dead Stock Item: ${snap.dead_stock_item || 'None'}\n`
         prompt += `- Pending Payments: ₹${snap.pending_payment_inr || 0}\n\n`
       }
-      prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n`
+      prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n\n`
+    }
+
+    if (recentMemory && recentMemory.length > 0) {
+      prompt += `=========================================\n`
+      prompt += `RECENT CONVERSATION HISTORY (From your last session):\n`
+      for (const msg of recentMemory) {
+        prompt += `- ${msg}\n`
+      }
+      prompt += `=========================================\n`
+      prompt += `Continue the conversation naturally from here. Do not explicitly greet them again unless it makes sense.\n`
     }
 
     return prompt
   }
 
   // ── Build the Gemini setup payload ────────────────────────────────────────
-  function buildSetupPayload(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any) {
+  function buildSetupPayload(language: string, isNewUser: boolean, artisanProfile?: any, businessSnapshot?: any, recentMemory?: string[]) {
     return {
       setup: {
         model: 'models/gemini-2.0-flash-exp',
@@ -203,7 +224,7 @@ app.get('/ws', async (c) => {
         systemInstruction: {
           parts: [
             {
-              text: buildSystemPrompt(language, isNewUser, artisanProfile, businessSnapshot)
+              text: buildSystemPrompt(language, isNewUser, artisanProfile, businessSnapshot, recentMemory)
             }
           ]
         },
@@ -337,6 +358,8 @@ app.get('/ws', async (c) => {
     let isNewUser = true
     let artisanProfile = null
     let businessSnapshot = null
+    let recentMemory: string[] = []
+    
     try {
       if (artisanId && !artisanId.startsWith('guest_')) {
         const drizzleDb = getDrizzle(c.env.DB)
@@ -347,13 +370,22 @@ app.get('/ws', async (c) => {
           artisanProfile = existing[0]
           businessSnapshot = await getBusinessSnapshot(c.env.DB, artisanId)
         }
+        
+        if (redisClient) {
+          const memoryKey = `memory:${artisanId}`
+          const storedMemory = await redisClient.get(memoryKey)
+          if (storedMemory && Array.isArray(storedMemory)) {
+             recentMemory = storedMemory
+             console.log(`[WS:${requestId}] Loaded ${recentMemory.length} recent memory turns for ${artisanId}`)
+          }
+        }
       }
     } catch (err) {
-      console.warn(`[WS:${requestId}] Could not check artisan existence:`, err)
+      console.warn(`[WS:${requestId}] Could not check artisan existence or memory:`, err)
     }
 
     console.log(`[WS:${requestId}] Building setup. language=${language}, isNewUser=${isNewUser}, artisanId=${artisanId}`)
-    const setupPayload = buildSetupPayload(language, isNewUser, artisanProfile, businessSnapshot)
+    const setupPayload = buildSetupPayload(language, isNewUser, artisanProfile, businessSnapshot, recentMemory)
 
     if (geminiReady && geminiWs.readyState === WebSocket.OPEN) {
       geminiWs.send(JSON.stringify(setupPayload))
@@ -632,6 +664,7 @@ app.get('/ws', async (c) => {
                   const shopUrl = `https://kalamitra.in/shop/${shopSlug}`
                   toolMessage = `Artisan profile for '${name}' created successfully! Shop URL: ${shopUrl}`
                   console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${artisanId}, Shop = ${shopSlug}`)
+                  sessionMemory.push(`Action: I just successfully created the artisan profile for ${name}. Onboarding is now complete.`)
                   
                   // Send the new artisan ID back to the client so they can store it
                   server.send(JSON.stringify({
@@ -715,6 +748,7 @@ app.get('/ws', async (c) => {
                   const shopUrl = `https://kalamitra.in/shop/${result.shopSlug}#${result.product?.id}`
                   toolMessage = `Product listed successfully! Storefront URL: ${shopUrl}`
                   console.log(`[WS:${requestId}] PRODUCT LISTED: ${titleEn} for ₹${price}`)
+                  sessionMemory.push(`Action: I just successfully created a product listing for ${titleEn} priced at ₹${price}.`)
                 } else {
                   toolMessage = `Failed to list product: ${result.error}`
                   console.error(`[WS:${requestId}] LISTING FAILED: ${result.error}`)
@@ -755,6 +789,7 @@ app.get('/ws', async (c) => {
                 // We use sessionArtisanId that was set during init
                 toolMessage = await getBusinessSnapshot(c.env.DB, sessionArtisanId)
                 console.log(`[WS:${requestId}] GET SNAPSHOT for artisan: ${sessionArtisanId}`)
+                sessionMemory.push(`Action: I just checked the business snapshot to see how they are doing.`)
               } catch (err: any) {
                 toolMessage = JSON.stringify({ error: `Error fetching snapshot: ${err.message}` })
                 console.error(`[WS:${requestId}] Error fetching snapshot:`, err)
@@ -787,6 +822,7 @@ app.get('/ws', async (c) => {
             if (part.text) {
               const preview = part.text.length > 50 ? part.text.substring(0, 50) + '...' : part.text
               console.log(`[WS:${requestId}] Gemini sent TEXT: ${preview}`)
+              sessionMemory.push(`Sakhi: ${part.text}`)
             }
             if (part.inlineData && part.inlineData.mimeType?.includes('audio/pcm')) {
               console.log(`[WS:${requestId}] Gemini sent AUDIO chunk: ${part.inlineData.data?.length} bytes`)
@@ -804,8 +840,20 @@ app.get('/ws', async (c) => {
   })
 
   // Manage clean disconnects
+  const saveMemoryOnClose = () => {
+    if (redisClient && sessionArtisanId && !sessionArtisanId.startsWith('guest_') && sessionMemory.length > 0) {
+      const memoryKey = `memory:${sessionArtisanId}`
+      const memoryToSave = sessionMemory.slice(-5) // Keep last 5 turns
+      redisClient.set(memoryKey, JSON.stringify(memoryToSave), { ex: 86400 }).catch((err: any) => {
+        console.error(`[WS:${requestId}] Failed to save session memory to Redis:`, err)
+      })
+      console.log(`[WS:${requestId}] Saved ${memoryToSave.length} turns to Redis memory for ${sessionArtisanId}`)
+    }
+  }
+
   server.addEventListener('close', () => {
     console.log(`[WS:${requestId}] Client connection closed`)
+    saveMemoryOnClose()
     if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
       geminiWs.close()
     }
@@ -813,6 +861,7 @@ app.get('/ws', async (c) => {
 
   geminiWs.addEventListener('close', (event: CloseEvent) => {
     console.log(`[WS:${requestId}] Gemini connection closed. code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean}`)
+    saveMemoryOnClose()
     server.close()
   })
 
