@@ -31,7 +31,7 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password, address, city, state, pincode }),
       });
-      const data = await res.json();
+      const data = await res.json() as any;
 
       if (data.success) {
         login(data.token, data.user);
@@ -59,7 +59,7 @@ export default function RegisterPage() {
           const { latitude, longitude } = position.coords;
           // Reverse geocoding using Nominatim (OpenStreetMap) with forced English language
           const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=en`);
-          const data = await res.json();
+          const data = await res.json() as any;
           
           if (data.address) {
             setAddress(data.display_name || "");

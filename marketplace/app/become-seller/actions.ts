@@ -18,7 +18,7 @@ export async function registerArtisan(formData: FormData) {
       body: JSON.stringify({ name, slug, bio }),
     });
 
-    const data = await res.json();
+    const data = await res.json() as { success?: boolean; error?: string };
 
     if (!res.ok || !data.success) {
       return { success: false, error: data.error || "Failed to register seller." };

@@ -9,14 +9,14 @@ import ProductCard from "@/components/ProductCard";
 export default async function Home({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
   const resolvedSearchParams = await searchParams;
   const category = resolvedSearchParams.category || "All Crafts";
-  let productsWithArtisans = [];
+  let productsWithArtisans: any[] = [];
   
   try {
     const fetchUrl = 'http://127.0.0.1:8787/marketplace';
       
     const res = await fetch(fetchUrl, { cache: 'no-store' });
     if (res.ok) {
-      const data = await res.json();
+      const data = await res.json() as any;
       if (data.success && data.products) {
         productsWithArtisans = data.products.map((p: any) => ({
           product: {

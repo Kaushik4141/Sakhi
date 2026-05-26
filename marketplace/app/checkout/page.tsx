@@ -72,7 +72,7 @@ export default function CheckoutPage() {
         try {
           const { latitude, longitude } = position.coords;
           const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=en`);
-          const data = await res.json();
+          const data = await res.json() as any;
           
           if (data.address) {
             setAddress(data.display_name || "");

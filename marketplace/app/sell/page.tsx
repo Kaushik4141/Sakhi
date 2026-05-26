@@ -6,7 +6,7 @@ export const runtime = "edge";
 export default async function SellPage() {
   // Fetch existing artisans for the dropdown from the API
   const res = await fetch('http://127.0.0.1:8787/api/artisans', { cache: 'no-store' });
-  const artisans = res.ok ? await res.json() : [];
+  const artisans = res.ok ? await res.json() as any : [];
 
   return (
     <main className="min-h-screen bg-noise bg-[#000000] text-white relative">

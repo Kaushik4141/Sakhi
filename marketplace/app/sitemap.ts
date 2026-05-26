@@ -5,15 +5,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   
   try {
     // Fetch products to generate dynamic sitemap entries
-    const res = await fetch('http://127.0.0.1:8787/api/products');
-    const data = await res.json();
+    const res = await fetch('http://127.0.0.1:8787/marketplace');
+    const response = await res.json() as any;
     
-    const productEntries = Array.isArray(data) ? data.map((item: any) => ({
-      url: `${baseUrl}/shop/${item.product.id}`,
-      lastModified: new Date(),
-      changeFrequency: 'weekly' as const,
-      priority: 0.8,
-    })) : [];
+    let productEntries: any[] = [];
+    if (response.success && response.products) {
+      productEntries = response.products.map((item: any) => ({
+        url: `${baseUrl}/shop/${item.id}`,
+        lastModified: new Date(),
+        changeFrequency: 'weekly' as const,
+        priority: 0.8,
+      }));
+    }
 
     return [
       {

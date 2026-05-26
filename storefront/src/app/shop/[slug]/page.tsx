@@ -231,12 +231,14 @@ function ProductCard({ product, artisan, theme, slug }: { product: Product, arti
           </div>
           
           <div className="grid grid-cols-1 gap-2.5">
-            <button 
-              className={`w-full ${theme.accent} py-2.5 rounded-xl font-medium text-sm transition-all shadow-sm active:scale-[0.98]`}
-              onClick="alert('UPI Payment coming soon! Contact ' + artisanName + ' directly.')"
+            <a 
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`w-full ${theme.accent} py-2.5 rounded-xl font-medium text-sm transition-all shadow-sm active:scale-[0.98] block text-center`}
             >
               Buy via UPI
-            </button>
+            </a>
             <a 
               href={whatsappUrl}
               target="_blank"

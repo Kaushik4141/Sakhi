@@ -13,7 +13,7 @@ type RazorpayWebhookBody = {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: RazorpayWebhookBody = await request.json();
+    const body: RazorpayWebhookBody = (await request.json()) as any;
 
     // ── Log the successful order ────────────────────────────────
     console.log("═══════════════════════════════════════════════════");

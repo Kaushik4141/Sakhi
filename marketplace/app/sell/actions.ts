@@ -14,7 +14,7 @@ export async function addProduct(formData: FormData) {
   const newArtisanSlug = formData.get("newArtisanSlug") as string;
   const newArtisanBio = formData.get("newArtisanBio") as string;
 
-  let finalArtisanId = parseInt(artisanIdStr);
+  let finalArtisanId: string | number = artisanIdStr;
 
   try {
     // 1. If "new" artisan was selected, insert it first via API
@@ -24,7 +24,7 @@ export async function addProduct(formData: FormData) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newArtisanName, slug: newArtisanSlug, bio: newArtisanBio }),
       });
-      const artData = await artRes.json();
+      const artData = await artRes.json() as any;
       if (!artRes.ok || !artData.success) {
         return { success: false, error: artData.error || "Failed to create new artisan." };
       }
@@ -32,7 +32,7 @@ export async function addProduct(formData: FormData) {
     }
 
     // 2. Validate final variables
-    if (!name || isNaN(finalArtisanId) || !priceStr) {
+    if (!name || !finalArtisanId || !priceStr) {
       return { success: false, error: "Missing required product fields." };
     }
 
@@ -50,7 +50,7 @@ export async function addProduct(formData: FormData) {
       }),
     });
     
-    const prodData = await prodRes.json();
+    const prodData = await prodRes.json() as any;
     if (!prodRes.ok || !prodData.success) {
       return { success: false, error: prodData.error || "Failed to add product." };
     }

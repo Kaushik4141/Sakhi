@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       fetch('http://127.0.0.1:8787/api/auth/me', {
         headers: { Authorization: `Bearer ${storedToken}` }
       })
-      .then(res => res.json())
+      .then(res => res.json() as any)
       .then(data => {
         if (data.success) {
           setToken(storedToken);

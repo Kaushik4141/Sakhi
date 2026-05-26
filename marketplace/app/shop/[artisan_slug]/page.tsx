@@ -25,7 +25,7 @@ export async function generateMetadata(
   try {
     const res = await fetch(`http://127.0.0.1:8787/storefront/${artisan_slug}`, { cache: 'no-store' });
     if (res.ok) {
-      const data = await res.json();
+      const data = await res.json() as any;
       if (data.success && data.artisan) {
         return {
           title: `${data.artisan.name} | Authentic Indian Crafts`,
@@ -55,7 +55,7 @@ export default async function StorefrontPage({ params }: StorefrontPageProps) {
   try {
     const res = await fetch(`http://127.0.0.1:8787/storefront/${artisan_slug}`, { cache: 'no-store' });
     if (res.ok) {
-      const data = await res.json();
+      const data = await res.json() as any;
       if (data.success && data.artisan) {
         artisan = data.artisan;
         products = data.products || [];
