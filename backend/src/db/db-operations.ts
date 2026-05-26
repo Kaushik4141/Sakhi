@@ -35,7 +35,11 @@ export async function insertProduct(
   name: string,
   price: number,
   stock: number,
-  imageUrl: string = ''
+  imageUrl: string = '',
+  descriptionSeo: string | null = null,
+  material: string | null = null,
+  color: string | null = null,
+  seoKeywords: string | null = null
 ) {
   try {
     const drizzleDb = getDrizzle(db);
@@ -49,6 +53,10 @@ export async function insertProduct(
         priceInr: price,
         stock,
         imageUrl,
+        descriptionSeo,
+        material,
+        color,
+        seoKeywords,
       })
       .returning();
 

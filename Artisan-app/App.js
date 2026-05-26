@@ -21,6 +21,8 @@ import { useSharedValue, withTiming, useDerivedValue, useFrameCallback } from 'r
 import * as FileSystem from 'expo-file-system/legacy';
 import { Canvas, Path, Skia, LinearGradient, vec } from '@shopify/react-native-skia';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import { Image, ActivityIndicator } from 'react-native';
 
 // ─── Translations Config ───────────────────────────────────────────────────────
 const TRANSLATIONS = {
@@ -167,6 +169,7 @@ const WS_HOST =
     ? '10.0.2.2'
     : getDevServerHost() || '172.25.9.169';
 const WS_URL = `ws://${WS_HOST}:8787/ws`;
+const HTTP_URL = `http://${WS_HOST}:8787/analyze-product`;
 const DUMMY_ARTISAN_ID = 'artisan_demo_001';
 const WS_RECONNECT_DELAY_MS = 3000;
 const APP_DEBUG_BUILD = 'ws-debug-2026-05-25-01';
@@ -585,6 +588,10 @@ export default function App() {
   const [splashActive, setSplashActive] = useState(true);
   const [hasSelectedLanguage, setHasSelectedLanguage] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState('en');
+  const [artisanId, setArtisanId] = useState(null);
+  const [isGeneratingPoster, setIsGeneratingPoster] = useState(false);
+  const [posterUrl, setPosterUrl] = useState(null);
+  const [shouldTriggerCamera, setShouldTriggerCamera] = useState(false);
 
   const t = (key) => {
     return TRANSLATIONS[currentLanguage]?.[key] || TRANSLATIONS['en']?.[key] || key;
@@ -704,17 +711,26 @@ export default function App() {
           recorderWebViewRef.current?.postMessage(JSON.stringify({ command: 'stop_playback' }));
         }
 
-        // Handle artisan_created event from backend onboarding
         if (response.type === 'artisan_created' && response.artisanId) {
           console.log('[ONBOARDING] Artisan profile created! ID:', response.artisanId, 'Shop:', response.shopSlug);
           try {
             await AsyncStorage.setItem('artisan_id', response.artisanId);
-            if (response.shopSlug) {
-              await AsyncStorage.setItem('shop_slug', response.shopSlug);
-            }
+            setArtisanId(response.artisanId);
           } catch (storageErr) {
             console.warn('[ONBOARDING] Failed to save artisan ID:', storageErr);
           }
+        }
+
+        // Handle Auto-Camera trigger from Gemini
+        if (response.type === 'trigger_camera') {
+          console.log('[ONBOARDING] Voice command received to trigger camera!');
+          setShouldTriggerCamera(true);
+        }
+
+        // Handle Finalized Poster
+        if (response.type === 'poster_generated') {
+          console.log('[POSTER] Poster generated successfully!');
+          setPosterUrl(response.posterUrl);
         }
 
         // Drill down to locate Gemini's audio output blocks
@@ -775,6 +791,78 @@ export default function App() {
   const profileContentProgress = useRef(new Animated.Value(0)).current;
   const [profileVisible, setProfileVisible] = useState(false);
   const [profileSubmenu, setProfileSubmenu] = useState('main');
+
+  const handleTakePhoto = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permissionResult.granted) {
+        alert("Camera permission is required to list products!");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        base64: true,
+        quality: 0.6,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setIsGeneratingPoster(true); // Now acts as "Analyzing..."
+        const imageBase64 = result.assets[0].base64;
+        
+        console.log('[HTTP] Uploading product photo for analysis...', HTTP_URL);
+        const response = await fetch(HTTP_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            artisanId: artisanId || await AsyncStorage.getItem('artisan_id'),
+            imageBase64: imageBase64
+          })
+        });
+        
+        const data = await response.json();
+        if (data.success && data.analysis) {
+          setIsGeneratingPoster(false);
+          const analysisText = `SYSTEM MESSAGE: The image was successfully analyzed.\nProduct: ${data.analysis.product_data.product_name_english}\nMarket Research: ${data.analysis.marketResearch}\nTell the user the market research findings and ask them what price they want to list it for. Once they tell you a price, call the finalize_product_listing tool!`;
+          
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+              clientContent: {
+                turns: [
+                  {
+                    role: "user",
+                    parts: [{ text: analysisText }]
+                  }
+                ],
+                turnComplete: true
+              }
+            }));
+          } else {
+            alert('Cannot reach Sakhi to negotiate price.');
+          }
+        } else {
+          setIsGeneratingPoster(false);
+          alert('Failed to analyze product: ' + (data.error || 'Unknown error'));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      alert('An error occurred during photo upload.');
+      setIsGeneratingPoster(false);
+    }
+  };
+
+  const closePoster = () => {
+    setPosterUrl(null);
+  };
+
+  useEffect(() => {
+    if (shouldTriggerCamera) {
+      setShouldTriggerCamera(false);
+      handleTakePhoto();
+    }
+  }, [shouldTriggerCamera]);
 
   const openProfile = () => {
     setProfileSubmenu('main');
@@ -1054,8 +1142,12 @@ export default function App() {
           setCurrentLanguage(savedLang);
           setHasSelectedLanguage(true);
         }
+        const storedArtisan = await AsyncStorage.getItem('artisan_id');
+        if (storedArtisan) {
+          setArtisanId(storedArtisan);
+        }
       } catch (err) {
-        console.warn('[Storage] Failed to read language:', err);
+        console.warn('[Storage] Failed to read data:', err);
       } finally {
         setAppReady(true);
       }
@@ -1358,6 +1450,26 @@ export default function App() {
                 </Text>
               </Animated.View>
             </Pressable>
+
+            {/* List Product Photo Button */}
+            {artisanId && (
+              <TouchableOpacity
+                style={{
+                  marginTop: 20,
+                  backgroundColor: '#48cae4',
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  borderRadius: 24,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+                onPress={handleTakePhoto}
+              >
+                <Text style={{ fontSize: 18 }}>📸</Text>
+                <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 16 }}>List Product (Take Photo)</Text>
+              </TouchableOpacity>
+            )}
 
             <Text style={styles.footerHint}>
               {wsStatus === WS_STATUS.SENDING
@@ -1682,6 +1794,34 @@ export default function App() {
           </ScrollView>
 
         </Animated.View>
+      )}
+
+      {/* ── Full Screen Loading Overlay ── */}
+      {isGeneratingPoster && (
+        <View style={StyleSheet.absoluteFillObject}>
+          <View style={styles.confirmOverlay}>
+            <ActivityIndicator size="large" color="#48cae4" />
+            <Text style={[styles.confirmText, { marginTop: 20 }]}>Generating Marketing Poster...</Text>
+            <Text style={{ color: '#fff', opacity: 0.7, marginTop: 10 }}>Analyzing image and conversation</Text>
+          </View>
+        </View>
+      )}
+
+      {/* ── Full Screen Poster Display ── */}
+      {posterUrl && (
+        <View style={StyleSheet.absoluteFillObject}>
+          <View style={styles.confirmOverlay}>
+            <View style={{ width: '90%', height: '80%', backgroundColor: '#fff', borderRadius: 20, overflow: 'hidden' }}>
+              <Image source={{ uri: posterUrl }} style={{ width: '100%', height: '100%', resizeMode: 'contain' }} />
+            </View>
+            <TouchableOpacity 
+              style={{ marginTop: 20, backgroundColor: '#48cae4', paddingHorizontal: 30, paddingVertical: 15, borderRadius: 25 }}
+              onPress={closePoster}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>Awesome!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
     </SafeAreaView>
   );

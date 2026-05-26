@@ -130,17 +130,25 @@ def create_poster_from_file(json_file_path: str, input_image_path: str, output_p
 
     # ─── 1. CANVAS SETTINGS ───
     W, H = 1080, 1350
-    BG_COLOR = (252, 250, 246)
-    TEXT_MAIN = (40, 30, 25)
-    TEXT_MUTED = (100, 90, 85)
-    ACCENT = (212, 140, 70)
+    # Create an elegant gradient background
+    poster = Image.new("RGB", (W, H))
+    draw_bg = ImageDraw.Draw(poster)
+    # Draw vertical gradient from light warm beige to a slightly darker terracotta beige
+    for y in range(H):
+        r = int(252 - (y / H) * (252 - 240))
+        g = int(248 - (y / H) * (248 - 228))
+        b = int(240 - (y / H) * (240 - 210))
+        draw_bg.line([(0, y), (W, y)], fill=(r, g, b))
 
-    poster = Image.new("RGB", (W, H), BG_COLOR)
+    TEXT_MAIN = (44, 30, 22)
+    TEXT_MUTED = (90, 75, 65)
+    ACCENT = (190, 110, 50)
+
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     try:
-        font_title = ImageFont.truetype("arial.ttf", 44)
+        font_title = ImageFont.truetype("arial.ttf", 72)
         font_body = ImageFont.truetype("arial.ttf", 26)
         font_tag = ImageFont.truetype("arialbd.ttf", 28)
     except IOError:
@@ -148,22 +156,37 @@ def create_poster_from_file(json_file_path: str, input_image_path: str, output_p
 
     # ─── 2. IMAGE & SHADOWS ───
     if os.path.exists(input_image_path):
-        prod_img = Image.open(input_image_path).convert("RGB")
-        prod_img.thumbnail((700, 700), Image.Resampling.LANCZOS)
+        # Open as RGBA to preserve transparency from remove.bg
+        prod_img = Image.open(input_image_path).convert("RGBA")
+        prod_img.thumbnail((750, 750), Image.Resampling.LANCZOS)
         img_x = (W - prod_img.width) // 2
-        img_y = 160
+        img_y = 150
         
-        for i in range(10):
-            opacity = int(40 - (i * 4))
-            draw.rectangle(
-                [img_x + 15 - i, img_y + 15 - i, img_x + prod_img.width + 15 + i, img_y + prod_img.height + 15 + i],
-                fill=(0, 0, 0, opacity)
-            )
+        # Draw a beautiful soft glowing circle behind the product
+        circle_radius = 420
+        cx, cy = W // 2, img_y + (prod_img.height // 2)
+        draw.ellipse(
+            [cx - circle_radius, cy - circle_radius, cx + circle_radius, cy + circle_radius],
+            fill=(255, 255, 255, 140)
+        )
+        
+        # Draw soft drop shadow for the transparent object
+        shadow = prod_img.copy()
+        shadow_data = shadow.load()
+        for y in range(shadow.height):
+            for x in range(shadow.width):
+                r, g, b, a = shadow_data[x, y]
+                if a > 0:
+                    shadow_data[x, y] = (0, 0, 0, int(a * 0.3))
+        
+        # Paste shadow with slight offset
+        overlay.paste(shadow, (img_x + 10, img_y + 20), shadow)
+        
+        # Paste actual product
+        overlay.paste(prod_img, (img_x, img_y), prod_img)
         
         poster = Image.alpha_composite(poster.convert("RGBA"), overlay).convert("RGB")
         poster_draw = ImageDraw.Draw(poster)
-        poster.paste(prod_img, (img_x, img_y))
-        poster_draw.rectangle([img_x - 1, img_y - 1, img_x + prod_img.width + 1, img_y + prod_img.height + 1], outline=(220, 210, 200), width=2)
     else:
         poster_draw = ImageDraw.Draw(poster)
         img_y = 160
@@ -176,25 +199,13 @@ def create_poster_from_file(json_file_path: str, input_image_path: str, output_p
     current_y = img_y + prod_img.height + 60
     title = product_data.get("product_name_english", "Handcrafted Asset").upper()
     poster_draw.text((W // 2, current_y), title, font=font_title, fill=TEXT_MAIN, anchor="mm")
-    current_y += 60
-
-    desc = product_data.get("detailed_visual_description", "")
-    lines = textwrap.wrap(desc, width=60)
-    for line in lines:
-        poster_draw.text((W // 2, current_y), line, font=font_body, fill=TEXT_MUTED, anchor="mm")
-        current_y += 38
+    current_y += 100
 
     # ─── 4. UI BADGE FOOTER ───
-    current_y += 40 
     price = product_data.get('artisan_claimed_price', 0)
-    origin = product_data.get('origin_region', 'Unknown')
     
-    poster_draw.rectangle([120, current_y, 480, current_y + 80], fill=(245, 240, 230), outline=(230, 220, 210), width=1)
-    poster_draw.text((300, current_y + 40), f"PRICE: ₹{price}", font=font_tag, fill=TEXT_MAIN, anchor="mm")
-
-    poster_draw.rectangle([520, current_y, W - 120, current_y + 80], fill=(245, 240, 230), outline=(230, 220, 210), width=1)
-    # 👇 THIS IS THE LINE THAT WAS FIXED!
-    poster_draw.text((W//2 + 200, current_y + 40), origin.upper(), font=font_tag, fill=TEXT_MAIN, anchor="mm")
+    poster_draw.rectangle([W//2 - 200, current_y, W//2 + 200, current_y + 80], fill=(245, 240, 230), outline=(230, 220, 210), width=1)
+    poster_draw.text((W//2, current_y + 40), f"PRICE: ₹{price}", font=font_tag, fill=TEXT_MAIN, anchor="mm")
 
     poster.save(output_poster_path, "PNG", quality=100)
     print(f"🎉 Premium Poster saved: {output_poster_path}")

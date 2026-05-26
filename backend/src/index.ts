@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
-import { Redis } from '@upstash/redis'
+import { Redis } from '@upstash/redis/cloudflare'
 import { insertProduct, getDrizzle, getStorefrontData, getMarketplaceFeed, updateProductStock, createArtisanProfile, createProductListing, insertMarketInsight, getBusinessSnapshot } from './db/db-operations'
+import { runMarketResearch } from '../../deep-research-agents/src/agents/market-agent'
 import { artisans } from './db/schema'
 import { eq } from 'drizzle-orm'
 import { runTestFlow } from './db/test-db'
@@ -10,6 +11,9 @@ type Bindings = {
   DB: D1Database
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
+  CLOUDINARY_CLOUD_NAME: string
+  CLOUDINARY_API_KEY: string
+  CLOUDINARY_API_SECRET: string
 }
 
 
@@ -109,6 +113,100 @@ app.post('/api/market-insights', async (c) => {
   }
 })
 
+app.post('/analyze-product', async (c) => {
+  try {
+    const body = await c.req.json()
+    const artisanId = body.artisanId
+    const imageBase64 = body.imageBase64
+
+    if (!artisanId || !imageBase64) {
+      return c.json({ success: false, error: 'Missing artisanId or imageBase64' }, 400)
+    }
+
+    // 1. Fetch recent conversation memory to send to Python
+    let chatTranscript = "No recent conversation available."
+    const redisUrl = c.env.UPSTASH_REDIS_REST_URL
+    const redisToken = c.env.UPSTASH_REDIS_REST_TOKEN
+    if (redisUrl && redisToken) {
+      const redis = new Redis({ url: redisUrl, token: redisToken })
+      const memory = await redis.get(`memory:${artisanId}`)
+      if (memory && Array.isArray(memory)) {
+        chatTranscript = memory.join("\\n")
+      }
+    }
+
+    // 2. Call Python FastAPI Service for Analysis
+    const pythonPayload = {
+      image_base64: imageBase64,
+      chat_transcript: chatTranscript,
+      gemini_api_key: c.env.GEMINI_API_KEY,
+      cloudinary_cloud_name: c.env.CLOUDINARY_CLOUD_NAME || "",
+      cloudinary_api_key: c.env.CLOUDINARY_API_KEY || "",
+      cloudinary_api_secret: c.env.CLOUDINARY_API_SECRET || ""
+    }
+
+    console.log(`[HTTP] Sending payload to Python microservice /analyze...`)
+    const pythonRes = await fetch('http://127.0.0.1:8000/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pythonPayload)
+    })
+
+    if (!pythonRes.ok) {
+      const errText = await pythonRes.text()
+      console.error("[HTTP] Python microservice failed:", errText)
+      return c.json({ success: false, error: `Python service error: ${errText}` }, 500)
+    }
+
+    const pythonData: any = await pythonRes.json()
+    const { product_data, transparent_image_url } = pythonData
+    
+    // 3. Perform Market Research via Tavily
+    let marketResearch = "Market research not available."
+    const tavilyKey = (c.env as any).TAVILY_API_KEY
+    if (product_data.product_name_english) {
+      try {
+        console.log(`[HTTP] Running Tavily Market Research for ${product_data.product_name_english}...`)
+        // Polyfill process.env for the imported module
+        if (typeof process === 'undefined') {
+          (globalThis as any).process = { env: {} };
+        }
+        if (tavilyKey) {
+          process.env.TAVILY_API_KEY = tavilyKey;
+        }
+
+        const tavilyData = await runMarketResearch(artisanId, product_data.product_name_english);
+        marketResearch = tavilyData.answer || "Research completed but no direct answer found.";
+      } catch (err) {
+        console.error("Tavily Error:", err);
+      }
+    }
+
+    // Cache the pending listing data securely in Redis
+    if (redisUrl && redisToken) {
+      const redis = new Redis({ url: redisUrl, token: redisToken });
+      await redis.set(`pending_listing:${artisanId}`, JSON.stringify({
+        productData: product_data,
+        transparentImageUrl: transparent_image_url
+      }), { ex: 3600 });
+    }
+
+    return c.json({
+      success: true,
+      analysis: {
+        product_data,
+        marketResearch,
+        transparent_image_url
+      }
+    })
+
+  } catch (err: any) {
+    console.error("[HTTP] /upload-product error:", err)
+    return c.json({ success: false, error: err.message }, 500)
+  }
+})
+
+
 app.get('/ws', async (c) => {
   const requestId = crypto.randomUUID()
   console.log(`[WS:${requestId}] Incoming /ws request`)
@@ -139,7 +237,7 @@ app.get('/ws', async (c) => {
   let sessionLanguage = 'english'
   let sessionArtisanId = ''
   const clientMessageQueue: string[] = []
-  const sessionMemory: string[] = []
+  let sessionMemory: string[] = []
 
   // Initialize Redis for Recent Turn Memory
   const redisUrl = c.env.UPSTASH_REDIS_REST_URL
@@ -198,7 +296,9 @@ app.get('/ws', async (c) => {
         prompt += `- Dead Stock Item: ${snap.dead_stock_item || 'None'}\n`
         prompt += `- Pending Payments: ₹${snap.pending_payment_inr || 0}\n\n`
       }
-      prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n\n`
+      prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n`
+      prompt += `CRITICAL: If the artisan wants to ADD a new product to their store, you MUST call the "request_product_photo" tool immediately! Do not ask for details first. Just call the tool so they can take a picture, and say something like "Great, I've opened the camera. Please take a photo of the product."\n\n`
+      prompt += `CRITICAL: When a product photo is uploaded, the system will inject a SYSTEM message with market research analysis. You must read that market research, tell the user the suggested price range, and ask them what price they want to list the product for. Once they agree on a final price, you MUST call the "finalize_product_listing" tool passing the price and the analysis details to officially list the product.\n\n`
     }
 
     if (recentMemory && recentMemory.length > 0) {
@@ -233,29 +333,23 @@ app.get('/ws', async (c) => {
           {
             functionDeclarations: [
               {
-                name: 'create_product_listing',
-                description: 'Create a new product listing when the artisan describes something she made and its price.',
+                name: 'request_product_photo',
+                description: 'Call this tool when the artisan mentions they want to add or list a new product. This will automatically open the camera on their device so they can take a picture of it.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {},
+                  required: []
+                }
+              },
+              {
+                name: 'finalize_product_listing',
+                description: 'Call this tool AFTER the product has been analyzed and you have negotiated a final price with the user. This officially generates the poster and saves the product to the store.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    product_name_original: {
-                      type: 'STRING',
-                      description: 'The name of the product in the language she spoke.'
-                    },
-                    price_inr: {
-                      type: 'INTEGER',
-                      description: 'The price of the product in rupees.'
-                    },
-                    material: {
-                      type: 'STRING',
-                      description: 'The material used (e.g. silk, cotton, clay), if mentioned.'
-                    },
-                    color: {
-                      type: 'STRING',
-                      description: 'The color of the product, if mentioned.'
-                    }
+                    price: { type: 'NUMBER', description: 'The final agreed price in INR' }
                   },
-                  required: ['product_name_original', 'price_inr']
+                  required: ['price']
                 }
               },
               {
@@ -354,6 +448,15 @@ app.get('/ws', async (c) => {
     // Otherwise, we wait for the client's init message to arrive
   })
 
+  // Helper to eagerly save memory
+  const saveMemory = () => {
+    if (redisClient && sessionArtisanId && !sessionArtisanId.startsWith('guest_') && sessionMemory.length > 0) {
+      const memoryKey = `memory:${sessionArtisanId}`
+      const memoryToSave = sessionMemory.slice(-5) // Keep last 5 turns
+      redisClient.set(memoryKey, JSON.stringify(memoryToSave), { ex: 86400 }).catch((err: any) => {})
+    }
+  }
+
   // ── Send setup to Gemini once we know the language ─────────────────────
   async function sendGeminiSetup(language: string, artisanId: string) {
     let isNewUser = true
@@ -374,9 +477,13 @@ app.get('/ws', async (c) => {
         
         if (redisClient) {
           const memoryKey = `memory:${artisanId}`
-          const storedMemory = await redisClient.get(memoryKey)
+          let storedMemory = await redisClient.get(memoryKey)
+          if (typeof storedMemory === 'string') {
+            try { storedMemory = JSON.parse(storedMemory) } catch(e) {}
+          }
           if (storedMemory && Array.isArray(storedMemory)) {
              recentMemory = storedMemory
+             sessionMemory = [...recentMemory]
              console.log(`[WS:${requestId}] Loaded ${recentMemory.length} recent memory turns for ${artisanId}`)
           }
         }
@@ -399,12 +506,16 @@ app.get('/ws', async (c) => {
     geminiSetupSent = true
 
     // Add a kickoff message to force Gemini to speak first
+    const kickoffText = (recentMemory && recentMemory.length > 0)
+      ? 'I got disconnected but I am back now. Please continue exactly where we left off in the recent conversation history. Do not say hello again.'
+      : 'Hello! I have just opened the app. Please greet me.';
+
     const kickoffMessage = {
       clientContent: {
         turns: [
           {
             role: 'user',
-            parts: [{ text: 'Hello! I have just opened the app. Please greet me.' }]
+            parts: [{ text: kickoffText }]
           }
         ],
         turnComplete: true
@@ -494,6 +605,15 @@ app.get('/ws', async (c) => {
           clientMessageQueue.push(msgToSend)
         }
         return
+      }
+
+      // Intercept text messages from client (like system injected market research)
+      if (payload.clientContent?.turns) {
+        const text = payload.clientContent.turns[0]?.parts?.[0]?.text;
+        if (text) {
+           sessionMemory.push(`System/Artisan: ${text}`);
+           saveMemory();
+        }
       }
 
       // Fallback: forward non-audio messages directly
@@ -685,6 +805,7 @@ app.get('/ws', async (c) => {
                   toolMessage = `Artisan profile for '${name}' created successfully! Shop URL: ${shopUrl}. SYSTEM OVERRIDE: Onboarding is 100% COMPLETE. Do not ask for name, district, craft, or experience anymore. Transition to business management mode. Acknowledge shop is ready and ask what product to list first.`
                   console.log(`[WS:${requestId}] ONBOARDING SUCCESS: Artisan ID = ${artisanId}, Shop = ${shopSlug}`)
                   sessionMemory.push(`Action: I just successfully created the artisan profile for ${name}. Onboarding is now complete.`)
+                  saveMemory()
                   
                   // Send the new artisan ID back to the client so they can store it
                   server.send(JSON.stringify({
@@ -724,70 +845,25 @@ app.get('/ws', async (c) => {
             return // Intercept: do not forward this toolCall to client
           }
 
-          const createProductListingCalls = functionCalls.filter(call => call.name === 'create_product_listing')
-          if (createProductListingCalls.length > 0) {
-            for (const call of createProductListingCalls) {
-              const { id, args } = call
-              const originalName = args?.product_name_original
-              const price = args?.price_inr
-              const material = args?.material
-              const color = args?.color
+          const requestProductPhotoCalls = functionCalls.filter(call => call.name === 'request_product_photo')
+          if (requestProductPhotoCalls.length > 0) {
+            for (const call of requestProductPhotoCalls) {
+              const { id } = call
               
-              let toolMessage = ''
-              let success = false
-              
-              try {
-                // 1. Translate product name to English
-                const translatePrompt = `Translate this Indian handicraft product name to English, keeping it natural but descriptive. Just return the translated name, nothing else: "${originalName}"`
-                const titleEn = await generateGeminiContent(translatePrompt, c.env.GEMINI_API_KEY)
-                
-                // 2. Generate 100-word SEO description
-                const details = [
-                  `Name: ${titleEn}`,
-                  material ? `Material: ${material}` : '',
-                  color ? `Color: ${color}` : '',
-                  `Price: ₹${price}`
-                ].filter(Boolean).join(', ')
-                
-                const seoPrompt = `Write a 100-word product description for an Indian handcraft marketplace for: [${details}]. Focus on authenticity, craftsmanship, and heritage. Do not include introductory phrases, just the description.`
-                const descriptionSeo = await generateGeminiContent(seoPrompt, c.env.GEMINI_API_KEY)
-                
-                // 3. Insert into database
-                // Note: The createProductListing function must exist in db-operations.ts
-                const result = await createProductListing(
-                  c.env.DB,
-                  sessionArtisanId, // We get this from the init message earlier
-                  originalName,
-                  titleEn,
-                  descriptionSeo,
-                  price
-                )
-                
-                if (result.success) {
-                  success = true
-                  const shopUrl = `https://kalamitra.in/shop/${result.shopSlug}#${result.product?.id}`
-                  toolMessage = `Product listed successfully! Storefront URL: ${shopUrl}`
-                  console.log(`[WS:${requestId}] PRODUCT LISTED: ${titleEn} for ₹${price}`)
-                  sessionMemory.push(`Action: I just successfully created a product listing for ${titleEn} priced at ₹${price}.`)
-                } else {
-                  toolMessage = `Failed to list product: ${result.error}`
-                  console.error(`[WS:${requestId}] LISTING FAILED: ${result.error}`)
-                }
-              } catch (err: any) {
-                toolMessage = `Error processing listing: ${err.message}`
-                console.error(`[WS:${requestId}] Error processing product listing:`, err)
-              }
+              // Tell the frontend to open the camera!
+              client.send(JSON.stringify({ type: 'trigger_camera' }))
+              console.log(`[WS:${requestId}] Sent trigger_camera command to client.`)
               
               const responsePayload = {
                 toolResponse: {
                   functionResponses: [
                     {
                       id: id,
-                      name: 'create_product_listing',
+                      name: 'request_product_photo',
                       response: {
                         output: {
-                          success,
-                          message: toolMessage
+                          success: true,
+                          message: "I have triggered the camera on the user's device. Wait for them to upload the photo."
                         }
                       }
                     }
@@ -795,8 +871,109 @@ app.get('/ws', async (c) => {
                 }
               }
               geminiWs.send(JSON.stringify(responsePayload))
+              sessionMemory.push(`Action: I automatically opened the camera on the artisan's phone so they can take a picture of their product.`)
+              saveMemory()
             }
-            return // Intercept: do not forward this toolCall to client
+            return
+          }
+
+          const finalizeProductListingCalls = functionCalls.filter(call => call.name === 'finalize_product_listing')
+          if (finalizeProductListingCalls.length > 0) {
+            for (const call of finalizeProductListingCalls) {
+              const { id, args } = call
+              const { price } = args
+
+              // Retrieve the pending listing data from Redis
+              let productData = null;
+              let transparentImageUrl = "";
+              if (redisClient) {
+                try {
+                  const cached = await redisClient.get(`pending_listing:${sessionArtisanId}`);
+                  if (cached) {
+                    const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+                    productData = parsed.productData;
+                    transparentImageUrl = parsed.transparentImageUrl;
+                  }
+                } catch (e) {
+                  console.error("Failed to fetch pending listing from Redis", e);
+                }
+              }
+
+              if (!productData || !transparentImageUrl) {
+                console.error("Cannot finalize listing: productData or transparentImageUrl is missing from cache.");
+                const responsePayload = {
+                  toolResponse: {
+                    functionResponses: [
+                      {
+                        id: id,
+                        name: 'finalize_product_listing',
+                        response: { output: { success: false, message: "System Error: The cached product data was lost. Please ask the user to retake the photo." } }
+                      }
+                    ]
+                  }
+                }
+                geminiWs.send(JSON.stringify(responsePayload))
+                continue;
+              }
+
+              let parsedProductData: any = productData;
+              parsedProductData.artisan_claimed_price = price
+
+              console.log(`[WS:${requestId}] Calling Python /generate-poster with final price ${price}`)
+
+              fetch('http://127.0.0.1:8000/generate-poster', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  product_data: parsedProductData,
+                  transparent_image_url: transparentImageUrl,
+                  cloudinary_cloud_name: c.env.CLOUDINARY_CLOUD_NAME || "",
+                  cloudinary_api_key: c.env.CLOUDINARY_API_KEY || "",
+                  cloudinary_api_secret: c.env.CLOUDINARY_API_SECRET || ""
+                })
+              }).then(async res => {
+                const pythonData: any = await res.json()
+                if (pythonData.success) {
+                  // Save Product to Database
+                  const db = c.env.DB
+                  insertProduct(
+                    db, 
+                    artisanId, 
+                    parsedProductData.product_name_english, 
+                    price, 
+                    10, // Default stock
+                    pythonData.poster_url, 
+                    parsedProductData.detailed_visual_description,
+                    parsedProductData.material,
+                    parsedProductData.color,
+                    Array.isArray(parsedProductData.seo_keywords) ? parsedProductData.seo_keywords.join(', ') : parsedProductData.seo_keywords
+                  ).then(() => {
+                      client.send(JSON.stringify({ type: 'poster_generated', posterUrl: pythonData.poster_url }))
+                  })
+                }
+              }).catch(e => console.error("Error finalizing listing:", e))
+              
+              const responsePayload = {
+                toolResponse: {
+                  functionResponses: [
+                    {
+                      id: id,
+                      name: 'finalize_product_listing',
+                      response: {
+                        output: {
+                          success: true,
+                          message: "The product is being finalized and the poster is generating. Tell the user it's all done!"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+              geminiWs.send(JSON.stringify(responsePayload))
+              sessionMemory.push(`Action: I finalized the product listing for ${price} INR and the poster is generating.`)
+              saveMemory()
+            }
+            return
           }
 
           const getSnapshotCalls = functionCalls.filter(call => call.name === 'get_business_snapshot')
@@ -843,6 +1020,7 @@ app.get('/ws', async (c) => {
               const preview = part.text.length > 50 ? part.text.substring(0, 50) + '...' : part.text
               console.log(`[WS:${requestId}] Gemini sent TEXT: ${preview}`)
               sessionMemory.push(`Sakhi: ${part.text}`)
+              saveMemory()
             }
             if (part.inlineData && part.inlineData.mimeType?.includes('audio/pcm')) {
               console.log(`[WS:${requestId}] Gemini sent AUDIO chunk: ${part.inlineData.data?.length} bytes`)
