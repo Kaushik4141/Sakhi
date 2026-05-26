@@ -1,0 +1,10 @@
+name = "marketplaceback"
+main = "src/index.ts"
+compatibility_date = "2024-04-05"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sakhi-db"
+database_id = "e737edca-0b7e-4bb0-89b2-f5d48b96ac9f"
+migrations_dir = "drizzle/migrations"

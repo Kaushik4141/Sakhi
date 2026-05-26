@@ -1,0 +1,55 @@
+module.exports = [
+  {
+    files: ["**/*.js", "**/*.jsx"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+      globals: {
+        // Node globals
+        module: "readonly",
+        exports: "readonly",
+        require: "readonly",
+        process: "readonly",
+        __dirname: "readonly",
+        // Browser & React Native globals
+        window: "readonly",
+        document: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+        fetch: "readonly",
+        WebSocket: "readonly",
+        FileReader: "readonly",
+        TextDecoder: "readonly",
+        Math: "readonly",
+        Date: "readonly",
+        Promise: "readonly",
+        Error: "readonly",
+        Int16Array: "readonly",
+        Float32Array: "readonly",
+        Uint8Array: "readonly",
+        ArrayBuffer: "readonly",
+        btoa: "readonly",
+        atob: "readonly",
+        // React Native specific
+        Platform: "readonly",
+        StyleSheet: "readonly",
+        Dimensions: "readonly",
+        Easing: "readonly",
+      },
+    },
+    rules: {
+      "no-undef": "error",
+      "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    }
+  }
+];
