@@ -1,23 +1,27 @@
 export const runtime = 'edge';
 
-import { getDb, schema } from "@/db";
-import { eq } from "drizzle-orm";
+// DB imports removed as we now use API
 import Header from "@/components/Header";
 import CategoriesBar from "@/components/CategoriesBar";
 import HeroCarousel from "@/components/HeroCarousel";
 import ProductCard from "@/components/ProductCard";
 
-export default async function Home() {
-  const db = getDb();
+export default async function Home({ searchParams }: { searchParams: { category?: string } }) {
+  const category = searchParams.category || "All Crafts";
+  let productsWithArtisans = [];
   
-  // Fetch products and their corresponding artisans
-  const productsWithArtisans = await db
-    .select({
-      product: schema.products,
-      artisan: schema.artisans,
-    })
-    .from(schema.products)
-    .innerJoin(schema.artisans, eq(schema.products.artisanId, schema.artisans.id));
+  try {
+    const fetchUrl = category !== "All Crafts" 
+      ? `http://127.0.0.1:8787/api/products?category=${encodeURIComponent(category)}`
+      : 'http://127.0.0.1:8787/api/products';
+      
+    const res = await fetch(fetchUrl, { cache: 'no-store' });
+    if (res.ok) {
+      productsWithArtisans = await res.json();
+    }
+  } catch (error) {
+    console.error("Backend is not running or unreachable.");
+  }
 
   return (
     <main className="min-h-screen bg-black">

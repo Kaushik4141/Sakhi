@@ -1,12 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getDb, schema } from "@/db";
 
 export async function addProduct(formData: FormData) {
-  const db = getDb();
-
-  // Extract form data
   const artisanIdStr = formData.get("artisanId") as string;
   const name = formData.get("name") as string;
   const priceStr = formData.get("price") as string;
@@ -14,35 +10,25 @@ export async function addProduct(formData: FormData) {
   let imageUrl = formData.get("imageUrl") as string;
   const isGiVerifiedStr = formData.get("isGiVerified") as string;
 
-  // Optional: New artisan fields
   const newArtisanName = formData.get("newArtisanName") as string;
   const newArtisanSlug = formData.get("newArtisanSlug") as string;
   const newArtisanBio = formData.get("newArtisanBio") as string;
 
-  if (!imageUrl) {
-    // High-fidelity fallback image if none provided
-    imageUrl = "https://images.unsplash.com/photo-1610701596007-11502861dcfa";
-  }
-
   let finalArtisanId = parseInt(artisanIdStr);
 
   try {
-    // 1. If "new" artisan was selected, insert it first
+    // 1. If "new" artisan was selected, insert it first via API
     if (artisanIdStr === "new") {
-      if (!newArtisanName || !newArtisanSlug) {
-        return { success: false, error: "New Artisan Name and Slug are required." };
+      const artRes = await fetch('http://127.0.0.1:8787/api/artisans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newArtisanName, slug: newArtisanSlug, bio: newArtisanBio }),
+      });
+      const artData = await artRes.json();
+      if (!artRes.ok || !artData.success) {
+        return { success: false, error: artData.error || "Failed to create new artisan." };
       }
-
-      const insertedArtisan = await db
-        .insert(schema.artisans)
-        .values({
-          name: newArtisanName,
-          slug: newArtisanSlug,
-          bio: newArtisanBio,
-        })
-        .returning();
-
-      finalArtisanId = insertedArtisan[0].id;
+      finalArtisanId = artData.artisan.id;
     }
 
     // 2. Validate final variables
@@ -50,26 +36,32 @@ export async function addProduct(formData: FormData) {
       return { success: false, error: "Missing required product fields." };
     }
 
-    const price = parseFloat(priceStr);
-    const isGiVerified = isGiVerifiedStr === "true";
-
-    // 3. Insert Product
-    await db.insert(schema.products).values({
-      artisanId: finalArtisanId,
-      name,
-      price,
-      description,
-      imageUrl,
-      isGiVerified,
+    // 3. Insert Product via API
+    const prodRes = await fetch('http://127.0.0.1:8787/api/products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        artisanId: finalArtisanId,
+        name,
+        price: parseFloat(priceStr),
+        description,
+        imageUrl,
+        isGiVerified: isGiVerifiedStr === "true",
+      }),
     });
+    
+    const prodData = await prodRes.json();
+    if (!prodRes.ok || !prodData.success) {
+      return { success: false, error: prodData.error || "Failed to add product." };
+    }
 
     // 4. Revalidate cache
     revalidatePath("/");
-    revalidatePath(`/shop/${newArtisanSlug || "all"}`);
+    revalidatePath(`/shop`);
 
     return { success: true };
   } catch (error: any) {
-    console.error("Failed to add product:", error);
-    return { success: false, error: error.message || "Failed to add product." };
+    console.error("Failed to add product via API:", error);
+    return { success: false, error: "Backend communication failed." };
   }
 }

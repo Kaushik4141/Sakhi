@@ -1,13 +1,12 @@
-import { getDb, schema } from "@/db";
+// DB imports removed
 import SellClientForm from "./SellClientForm";
 
 export const runtime = "edge";
 
 export default async function SellPage() {
-  const db = getDb();
-  
-  // Fetch existing artisans for the dropdown
-  const artisans = await db.select().from(schema.artisans);
+  // Fetch existing artisans for the dropdown from the API
+  const res = await fetch('http://127.0.0.1:8787/api/artisans', { cache: 'no-store' });
+  const artisans = res.ok ? await res.json() : [];
 
   return (
     <main className="min-h-screen bg-noise bg-[#000000] text-white relative">

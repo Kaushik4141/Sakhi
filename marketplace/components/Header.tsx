@@ -1,10 +1,14 @@
 "use client";
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { useCart } from './CartProvider';
+import { useAuth } from './AuthProvider';
 
 export default function Header() {
   const { cartCount } = useCart();
+  const { user, logout } = useAuth();
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-50 w-full bg-[#0a0a0a] border-b border-[#333333] shadow-md">
@@ -35,9 +39,6 @@ export default function Header() {
 
         {/* Actions */}
         <div className="flex items-center gap-6">
-          <button className="hidden sm:block text-sm font-semibold text-white hover:text-[#f3d286] transition-colors">
-            Login
-          </button>
           <Link href="/become-seller" className="hidden sm:block text-sm font-medium text-white hover:text-[#f3d286] transition-colors">
             Become a Seller
           </Link>
@@ -54,6 +55,46 @@ export default function Header() {
               </span>
             )}
           </Link>
+
+          {/* User Profile / Login */}
+          {user ? (
+            <div className="relative">
+              <button 
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="hidden sm:flex items-center gap-2 text-sm font-semibold text-[#f3d286] hover:text-white transition-colors focus:outline-none"
+              >
+                <div className="h-8 w-8 rounded-full bg-[#333333] flex items-center justify-center text-white border border-[#f3d286]">
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+                Hi, {user.name}
+              </button>
+              
+              {isDropdownOpen && (
+                <div className="absolute right-0 mt-3 w-48 bg-[#111111] border border-[#333333] rounded-lg shadow-xl overflow-hidden z-50">
+                  <Link 
+                    href="/profile" 
+                    onClick={() => setIsDropdownOpen(false)}
+                    className="block px-4 py-3 text-sm text-white hover:bg-[#222222] transition-colors"
+                  >
+                    My Profile
+                  </Link>
+                  <button 
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      logout();
+                    }}
+                    className="block w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-[#222222] transition-colors border-t border-[#333333]"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Link href="/login" className="hidden sm:block text-sm font-semibold text-white hover:text-[#f3d286] transition-colors">
+              Login
+            </Link>
+          )}
         </div>
       </div>
     </header>

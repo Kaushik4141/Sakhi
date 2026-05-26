@@ -1,6 +1,8 @@
 "use client";
 
 import Link from 'next/link';
+import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { useCart } from './CartProvider';
 
 interface Product {
@@ -17,6 +19,7 @@ interface Artisan {
 
 export default function ProductCard({ product, artisan }: { product: Product, artisan?: Artisan }) {
   const { addToCart } = useCart();
+  const router = useRouter();
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -28,13 +31,21 @@ export default function ProductCard({ product, artisan }: { product: Product, ar
     });
   };
 
+  const handleBuyNow = (e: React.MouseEvent) => {
+    e.preventDefault();
+    handleAddToCart(e);
+    router.push('/checkout');
+  };
+
   return (
     <div className="group relative flex flex-col overflow-hidden bg-[#111111] border border-[#222222] transition-all hover:border-[#444444] hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] hover:-translate-y-1">
       <div className="relative aspect-square w-full bg-[#1a1a1a] overflow-hidden">
-        <img
-          src={product.imageUrl || 'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=800&auto=format&fit=crop&q=60'}
+        <Image
+          src={product.imageUrl || 'https://images.unsplash.com/photo-1610701596007-11502861dcfa'}
           alt={product.name}
-          className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-90 group-hover:opacity-100"
+          fill
+          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+          className="object-cover transition-transform duration-700 group-hover:scale-110 opacity-90 group-hover:opacity-100"
         />
         {product.isGiVerified && (
           <div className="absolute top-3 left-3 bg-gradient-to-r from-green-600 to-green-500 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-sm shadow-md z-10 flex items-center gap-1">
@@ -75,7 +86,10 @@ export default function ProductCard({ product, artisan }: { product: Product, ar
           >
             ADD TO CART
           </button>
-          <button className="flex-1 bg-[#f3d286] hover:bg-[#ffffff] hover:-translate-y-0.5 text-black text-[11px] font-bold py-2.5 rounded transition-all shadow hover:shadow-[0_4px_12px_rgba(243,210,134,0.3)]">
+          <button 
+            onClick={handleBuyNow}
+            className="flex-1 bg-[#f3d286] hover:bg-[#ffffff] hover:-translate-y-0.5 text-black text-[11px] font-bold py-2.5 rounded transition-all shadow hover:shadow-[0_4px_12px_rgba(243,210,134,0.3)]"
+          >
             BUY NOW
           </button>
         </div>
