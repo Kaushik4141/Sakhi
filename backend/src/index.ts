@@ -1256,8 +1256,21 @@ app.get('/ws', async (c) => {
                     parsedProductData.material,
                     parsedProductData.color,
                     Array.isArray(parsedProductData.seo_keywords) ? parsedProductData.seo_keywords.join(', ') : parsedProductData.seo_keywords
-                  ).then(() => {
-                      client.send(JSON.stringify({ type: 'poster_generated', posterUrl: pythonData.poster_url }))
+                  ).then(async () => {
+                      let shopUrl = "http://localhost:3000";
+                      try {
+                        const artisanRec = await db.select().from(artisans).where(eq(artisans.id, artisanId)).limit(1);
+                        if (artisanRec.length > 0) {
+                          shopUrl = `http://localhost:3000/shop/${artisanRec[0].id}`; // The marketplace uses the artisan ID in the URL, e.g. /shop/artisan-lakshmi-001
+                        }
+                      } catch (err) {
+                        console.error("Error fetching artisan for shop URL:", err);
+                      }
+                      client.send(JSON.stringify({ 
+                        type: 'poster_generated', 
+                        posterUrl: pythonData.poster_url,
+                        shopUrl: shopUrl
+                      }))
                   })
                 }
               }).catch(e => console.error("Error finalizing listing:", e))

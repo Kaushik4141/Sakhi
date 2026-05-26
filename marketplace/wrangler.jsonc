@@ -1,6 +1,7 @@
 {
   "name": "sakhi",
   "compatibility_date": "2024-09-23",
+  "pages_build_output_dir": ".vercel/output/static",
   "d1_databases": [
     {
       "binding": "DB",
