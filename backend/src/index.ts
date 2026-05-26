@@ -5,6 +5,9 @@ import { runMarketResearch } from '../../deep-research-agents/src/agents/market-
 import { artisans } from './db/schema'
 import { eq } from 'drizzle-orm'
 import { runTestFlow } from './db/test-db'
+import { cors } from 'hono/cors'
+import { jwt, sign, verify } from 'hono/jwt'
+import { users } from './db/schema'
 
 type Bindings = {
   GEMINI_API_KEY: string
@@ -19,6 +22,11 @@ type Bindings = {
 
 
 const app = new Hono<{ Bindings: Bindings }>()
+
+app.use('/*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'POST', 'OPTIONS'],
+}))
 
 app.get('/', (c) => {
   return c.text('Gemini Live API WebSocket Proxy is running!')
@@ -85,6 +93,147 @@ app.get('/marketplace', async (c) => {
     return c.json({ success: false, error: err.message }, 500)
   }
 })
+
+// ── ARTISANS ─────────────────────────────────────────────────────────────────
+app.get('/api/artisans', async (c) => {
+  try {
+    const drizzleDb = getDrizzle(c.env.DB);
+    const allArtisans = await drizzleDb.select().from(artisans);
+    // map shopSlug to slug for marketplace frontend compatibility
+    const mapped = allArtisans.map(a => ({
+      ...a,
+      slug: a.shopSlug
+    }));
+    return c.json(mapped);
+  } catch (error: any) {
+    console.error("DB Error:", error.message);
+    return c.json([]); 
+  }
+});
+
+// ── AUTHENTICATION ───────────────────────────────────────────────────────────
+const JWT_SECRET = 'super-secret-key-sakhi'; 
+
+async function hashPassword(password: string) {
+  const msgUint8 = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+app.post('/api/auth/register', async (c) => {
+  const drizzleDb = getDrizzle(c.env.DB);
+  const { name, email, password, address, city, state, pincode } = await c.req.json();
+
+  if (!name || !email || !password) {
+    return c.json({ success: false, error: "Name, email, and password are required." }, 400);
+  }
+
+  try {
+    const existingUser = await drizzleDb.select().from(users).where(eq(users.email, email));
+    if (existingUser.length > 0) {
+      return c.json({ success: false, error: "User with this email already exists." }, 400);
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    await drizzleDb.insert(users).values({
+      name,
+      email,
+      passwordHash,
+      address: address || null,
+      city: city || null,
+      state: state || null,
+      pincode: pincode || null,
+    });
+
+    const inserted = await drizzleDb.select().from(users).where(eq(users.email, email));
+    const user = inserted[0];
+    const token = await sign({ id: user.id, name: user.name, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 }, JWT_SECRET);
+
+    return c.json({ 
+      success: true, 
+      token, 
+      user: { 
+        id: user.id, 
+        name: user.name, 
+        email: user.email,
+        address: user.address,
+        city: user.city,
+        state: user.state,
+        pincode: user.pincode
+      } 
+    });
+  } catch (error: any) {
+    console.error("REGISTER ERROR:", error);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
+app.post('/api/auth/login', async (c) => {
+  const drizzleDb = getDrizzle(c.env.DB);
+  const { email, password } = await c.req.json();
+
+  if (!email || !password) {
+    return c.json({ success: false, error: "Email and password required." }, 400);
+  }
+
+  try {
+    const existingUsers = await drizzleDb.select().from(users).where(eq(users.email, email));
+    if (existingUsers.length === 0) {
+      return c.json({ success: false, error: "Invalid credentials." }, 401);
+    }
+
+    const user = existingUsers[0];
+    const passwordHash = await hashPassword(password);
+
+    if (passwordHash !== user.passwordHash) {
+      return c.json({ success: false, error: "Invalid credentials." }, 401);
+    }
+
+    const token = await sign({ id: user.id, name: user.name, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 }, JWT_SECRET);
+    
+    return c.json({ 
+      success: true, 
+      token, 
+      user: { 
+        id: user.id, 
+        name: user.name, 
+        email: user.email,
+        address: user.address,
+        city: user.city,
+        state: user.state,
+        pincode: user.pincode
+      } 
+    });
+  } catch (error: any) {
+    console.error("LOGIN ERROR:", error);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
+app.get('/api/auth/me', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ success: false, error: "Unauthorized" }, 401);
+  }
+  
+  const token = authHeader.split(' ')[1];
+  try {
+    const payload = await verify(token, JWT_SECRET);
+    return c.json({ success: true, user: payload });
+  } catch (error) {
+    return c.json({ success: false, error: "Invalid token" }, 401);
+  }
+});
+
+// ── WEBHOOKS ─────────────────────────────────────────────────────────────────
+app.post('/api/webhooks/razorpay', async (c) => {
+  const body = await c.req.json();
+  console.log("Razorpay Webhook received:", body);
+  return c.json({ status: "ok" });
+});
+
 
 app.post('/api/market-insights', async (c) => {
   try {
