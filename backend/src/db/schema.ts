@@ -9,6 +9,8 @@ export const artisans = sqliteTable('artisans', {
   uinNumber: text('uin_number').notNull(),
   craftType: text('craft_type'),
   experienceYears: text('experience_years'),
+  language: text('language').default('en'),
+  theme: text('theme').default('terracotta'),
 });
 
 import { sql } from 'drizzle-orm';
@@ -28,6 +30,7 @@ export const products = sqliteTable('products', {
   color: text('color'),
   seoKeywords: text('seo_keywords'),
   isLive: integer('is_live', { mode: 'boolean' }).default(true),
+  isGiCertified: integer('is_gi_certified', { mode: 'boolean' }).default(false),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 export const orders = sqliteTable('orders', {

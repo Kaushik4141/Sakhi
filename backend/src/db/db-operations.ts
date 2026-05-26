@@ -606,6 +606,12 @@ export async function createArtisanProfile(
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') + '-' + randomSuffix;
 
+    // Determine the theme based on the current number of artisans
+    const allArtisans = await drizzleDb.select().from(schema.artisans);
+    const count = allArtisans.length;
+    const themes = ["terracotta", "indigo", "forest"] as const;
+    const assignedTheme = themes[count % 3];
+
     const result = await drizzleDb
       .insert(schema.artisans)
       .values({
@@ -616,6 +622,7 @@ export async function createArtisanProfile(
         uinNumber: 'PENDING',
         craftType,
         experienceYears,
+        theme: assignedTheme,
       })
       .returning();
 
