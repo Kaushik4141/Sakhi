@@ -24,6 +24,9 @@ export const products = sqliteTable('products', {
   priceInr: integer('price_inr').notNull(),
   stock: integer('stock').notNull(),
   imageUrl: text('image_url').notNull(),
+  material: text('material'),
+  color: text('color'),
+  seoKeywords: text('seo_keywords'),
   isLive: integer('is_live', { mode: 'boolean' }).default(true),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });

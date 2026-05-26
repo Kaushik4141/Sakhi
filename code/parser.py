@@ -5,8 +5,8 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
-# Initialize the official SDK Client
-client = genai.Client()
+# We will initialize the client dynamically inside the function
+# client = genai.Client()
 
 # =====================================================================
 # 📋 STEP 1: DEFINE THE RICH DESCRIPTION & CONVERSATION SCHEMA
@@ -31,7 +31,7 @@ class CompleteProductBrief(BaseModel):
 # 🛠️ STEP 2: THE SINGLE-SHOT MULTIMODAL PARSING CORNERSTONE FUNCTION
 # =====================================================================
 # 👇 THIS IS THE LINE THAT WAS CAUSING YOUR CRASH! IT NOW HAS output_json_path
-def generate_product_brief(chat_transcript: str, image_file_path: str, output_json_path: str) -> dict:
+def generate_product_brief(chat_transcript: str, image_file_path: str, output_json_path: str, api_key: str = None) -> dict:
     if not os.path.exists(image_file_path):
         raise FileNotFoundError(f"Target product image missing at: {image_file_path}")
         
@@ -104,6 +104,12 @@ Every token you output must serve the JSON structure. Begin your response immedi
     user_prompt = f"Execute structural catalog parsing. Here is the active context transcript:\n\n{chat_transcript}"
     
     print("⚡ Transmitting multimodal payload to Gemini 2.5 Matrix...")
+    
+    # Initialize client locally
+    if api_key:
+        client = genai.Client(api_key=api_key)
+    else:
+        client = genai.Client()
     
     response = client.models.generate_content(
         model="gemini-2.5-flash",
