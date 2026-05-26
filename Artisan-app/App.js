@@ -12,6 +12,7 @@ import {
   Dimensions,
   Easing,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -228,6 +229,7 @@ const WS_HOST =
     : getDevServerHost() || '172.25.9.169';
 const WS_URL = `ws://${WS_HOST}:8787/ws`;
 const HTTP_URL = `http://${WS_HOST}:8787/analyze-product`;
+const AUTO_FINALIZE_URL = `http://${WS_HOST}:8787/auto-finalize`;
 const DUMMY_ARTISAN_ID = 'artisan_demo_001';
 const WS_RECONNECT_DELAY_MS = 3000;
 const APP_DEBUG_BUILD = 'ws-debug-2026-05-25-01';
@@ -342,8 +344,8 @@ const PCM_RECORDER_HTML = `
         
         // Schedule playback for seamless audio
         if (nextScheduledTime < playContext.currentTime) {
-          // Buffer underrun or first chunk - add 150ms jitter buffer
-          nextScheduledTime = playContext.currentTime + 0.15;
+          // Buffer underrun or first chunk - add 50ms jitter buffer
+          nextScheduledTime = playContext.currentTime + 0.05;
         }
 
         const sourceNode = playContext.createBufferSource();
@@ -649,6 +651,7 @@ export default function App() {
   const [artisanId, setArtisanId] = useState(null);
   const [isGeneratingPoster, setIsGeneratingPoster] = useState(false);
   const [posterUrl, setPosterUrl] = useState(null);
+  const [storefrontUrl, setStorefrontUrl] = useState(null);
   const [shouldTriggerCamera, setShouldTriggerCamera] = useState(false);
 
   const t = (key) => {
@@ -773,6 +776,9 @@ export default function App() {
           console.log('[ONBOARDING] Artisan profile created! ID:', response.artisanId, 'Shop:', response.shopSlug);
           try {
             await AsyncStorage.setItem('artisan_id', response.artisanId);
+            if (response.shopSlug) {
+              await AsyncStorage.setItem('shop_slug', response.shopSlug);
+            }
             setArtisanId(response.artisanId);
           } catch (storageErr) {
             console.warn('[ONBOARDING] Failed to save artisan ID:', storageErr);
@@ -881,8 +887,8 @@ export default function App() {
         
         const data = await response.json();
         if (data.success && data.analysis) {
-          setIsGeneratingPoster(false);
-          const analysisText = `SYSTEM MESSAGE: The image was successfully analyzed.\nProduct: ${data.analysis.product_data.product_name_english}\nMarket Research: ${data.analysis.marketResearch}\nTell the user the market research findings and ask them what price they want to list it for. Once they tell you a price, call the finalize_product_listing tool!`;
+          // Still tell Gemini the analysis so she narrates the market research
+          const analysisText = `SYSTEM MESSAGE: The image was successfully analyzed.\nProduct: ${data.analysis.product_data.product_name_english}\nMarket Research: ${data.analysis.marketResearch}\nTell the user the market research findings. The product is being auto-listed at ₹500.`;
           
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({
@@ -896,9 +902,44 @@ export default function App() {
                 turnComplete: true
               }
             }));
-          } else {
-            alert('Cannot reach Sakhi to negotiate price.');
           }
+
+          // DEMO MODE: Auto-finalize after 10 seconds with hardcoded price ₹500
+          const currentArtisanId = artisanId || await AsyncStorage.getItem('artisan_id');
+          console.log('[DEMO] Will auto-finalize in 10 seconds with price ₹500...');
+          setTimeout(async () => {
+            try {
+              console.log('[DEMO] Auto-finalizing now...');
+              setIsGeneratingPoster(true);
+              const finalizeRes = await fetch(AUTO_FINALIZE_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  artisanId: currentArtisanId,
+                  price: 500,
+                  discount: 0,
+                }),
+              });
+              const finalizeData = await finalizeRes.json();
+              setIsGeneratingPoster(false);
+              if (finalizeData.success) {
+                console.log('[DEMO] Auto-finalize success! Poster:', finalizeData.posterUrl);
+                setPosterUrl(finalizeData.posterUrl);
+                if (finalizeData.storefrontUrl) {
+                  setStorefrontUrl(finalizeData.storefrontUrl);
+                }
+              } else {
+                console.error('[DEMO] Auto-finalize failed:', finalizeData.error);
+                alert('Failed to generate poster: ' + (finalizeData.error || 'Unknown error'));
+              }
+            } catch (finalizeErr) {
+              setIsGeneratingPoster(false);
+              console.error('[DEMO] Auto-finalize error:', finalizeErr);
+              alert('Error generating poster.');
+            }
+          }, 10000);
+
+          setIsGeneratingPoster(false);
         } else {
           setIsGeneratingPoster(false);
           alert('Failed to analyze product: ' + (data.error || 'Unknown error'));
@@ -913,6 +954,15 @@ export default function App() {
 
   const closePoster = () => {
     setPosterUrl(null);
+  };
+
+  const openStorefront = () => {
+    if (storefrontUrl) {
+      Linking.openURL(storefrontUrl).catch(err => {
+        console.error('Failed to open storefront URL:', err);
+        alert('Could not open the website. URL: ' + storefrontUrl);
+      });
+    }
   };
 
   useEffect(() => {
@@ -1427,6 +1477,26 @@ export default function App() {
         </View>
       </View>
 
+      <View style={{ alignItems: 'flex-end', paddingHorizontal: 20, paddingTop: 10, zIndex: 5, backgroundColor: '#ffffff' }}>
+        {artisanId && (
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#48cae4',
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 16,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+            }}
+            onPress={handleTakePhoto}
+          >
+            <Text style={{ fontSize: 12 }}>📸</Text>
+            <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>List Product</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
       {/* ── Top Half: Camera Feed Placeholder ── */}
       <View style={{ flex: 1, backgroundColor: '#ffffff' }} />
 
@@ -1472,26 +1542,6 @@ export default function App() {
               </Animated.View>
             </Pressable>
 
-            {/* List Product Photo Button */}
-            {artisanId && (
-              <TouchableOpacity
-                style={{
-                  marginTop: 20,
-                  backgroundColor: '#48cae4',
-                  paddingHorizontal: 24,
-                  paddingVertical: 12,
-                  borderRadius: 24,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-                onPress={handleTakePhoto}
-              >
-                <Text style={{ fontSize: 18 }}>📸</Text>
-                <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 16 }}>List Product (Take Photo)</Text>
-              </TouchableOpacity>
-            )}
-
             <Text style={styles.footerHint}>
               {wsStatus === WS_STATUS.SENDING
                 ? 'Uploading audio…'
@@ -1506,7 +1556,7 @@ export default function App() {
       </View>
 
       {/* ── Persistent Skia Waveform Canvas ── */}
-      <Canvas style={{ width: '100%', height: 200, position: 'absolute', bottom: 0, left: 0 }}>
+      <Canvas style={{ width: '100%', height: 200, position: 'absolute', bottom: 0, left: 0 }} pointerEvents="none">
         {/* Wave 4 (Pink) */}
         <Path path={wave4} style="stroke" strokeWidth={5} color="#ec4899" opacity={0.14}>
           <BlurMask radius={8} style="normal" />
@@ -1531,27 +1581,6 @@ export default function App() {
         </Path>
         <Path path={wave1} style="stroke" strokeWidth={2.5} color="#48cae4" opacity={0.95} />
       </Canvas>
-
-      {/* ── Camera Floating Action Button ── */}
-      <TouchableOpacity
-        style={styles.camFab}
-        onPress={() => setShowCamera(true)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.camFabText}>📷</Text>
-      </TouchableOpacity>
-
-      {/* ── Conditional Camera Overlay ── */}
-      {showCamera && (
-        <CameraOverlay
-          onClose={() => setShowCamera(false)}
-          cameraGranted={cameraGranted}
-          cameraLoading={cameraLoading}
-          cameraDenied={cameraDenied}
-          requestCameraPermission={requestCameraPermission}
-          t={t}
-        />
-      )}
 
       {/* ── Profile Overlay ── */}
       {profileVisible && (
@@ -1816,11 +1845,20 @@ export default function App() {
       {posterUrl && (
         <View style={StyleSheet.absoluteFillObject}>
           <View style={styles.confirmOverlay}>
-            <View style={{ width: '90%', height: '80%', backgroundColor: '#fff', borderRadius: 20, overflow: 'hidden' }}>
+            <View style={{ width: '90%', height: '70%', backgroundColor: '#fff', borderRadius: 20, overflow: 'hidden' }}>
               <Image source={{ uri: posterUrl }} style={{ width: '100%', height: '100%', resizeMode: 'contain' }} />
             </View>
+            {storefrontUrl && (
+              <TouchableOpacity 
+                style={{ marginTop: 14, backgroundColor: '#22c55e', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                onPress={openStorefront}
+              >
+                <Text style={{ fontSize: 18 }}>🌐</Text>
+                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>View Your Website</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity 
-              style={{ marginTop: 20, backgroundColor: '#48cae4', paddingHorizontal: 30, paddingVertical: 15, borderRadius: 25 }}
+              style={{ marginTop: 10, backgroundColor: '#48cae4', paddingHorizontal: 30, paddingVertical: 15, borderRadius: 25 }}
               onPress={closePoster}
             >
               <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>Awesome!</Text>

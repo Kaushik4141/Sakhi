@@ -92,28 +92,6 @@
 #     print(f"🎉 Production Poster successfully baked and saved at: {output_poster_path}")
 
 
-# # =====================================================================
-# # 🧪 MOCK PIPELINE DATA INVOCATION CHECKER
-# # =====================================================================
-# if __name__ == "__main__":
-#     # Simulating the structured variable object that comes straight out of your Gemma parser
-#     MOCK_GEMMA_OUTPUT = {
-#         "product_name_english": "Hand-Woven Premium Jute Tote Bag",
-#         "artisan_claimed_price": 350,
-#         "origin_region": "Bantwal, Dakshina Kannada",
-#         "detailed_visual_description": "A beautifully structured carry bag woven from high-density natural jute fibers. Features robust cross-stitch cotton reinforcement along borders with thick braided handles built for durability and premium tactile feel.",
-#         "conversation_context_summary": "Artisan working near Bantwal ready to fulfill orders.",
-#         "seo_keywords": ["jute bag", "sustainable shopping"]
-#     }
-    
-#     # Point this to your active image path inside the folder
-#     TEST_IMAGE = "image.jpg"
-#     OUTPUT_POSTER = "artisan_marketing_poster.png"
-    
-#     print("🎬 Initializing Poster Engine Canvas Compilation Module...")
-#     create_artisan_poster(MOCK_GEMMA_OUTPUT, TEST_IMAGE, OUTPUT_POSTER)
-
-
 import os
 import json
 from PIL import Image, ImageDraw, ImageFont
@@ -148,22 +126,23 @@ def create_poster_from_file(json_file_path: str, input_image_path: str, output_p
     draw = ImageDraw.Draw(overlay)
 
     try:
-        font_title = ImageFont.truetype("arial.ttf", 72)
+        font_title = ImageFont.truetype("arial.ttf", 40)
         font_body = ImageFont.truetype("arial.ttf", 26)
+        font_price = ImageFont.truetype("arialbd.ttf", 52)
         font_tag = ImageFont.truetype("arialbd.ttf", 28)
     except IOError:
-        font_title = font_body = font_tag = ImageFont.load_default()
+        font_title = font_body = font_price = font_tag = ImageFont.load_default()
 
     # ─── 2. IMAGE & SHADOWS ───
     if os.path.exists(input_image_path):
         # Open as RGBA to preserve transparency from remove.bg
         prod_img = Image.open(input_image_path).convert("RGBA")
-        prod_img.thumbnail((750, 750), Image.Resampling.LANCZOS)
+        prod_img.thumbnail((600, 600), Image.Resampling.LANCZOS)
         img_x = (W - prod_img.width) // 2
         img_y = 150
         
         # Draw a beautiful soft glowing circle behind the product
-        circle_radius = 420
+        circle_radius = 350
         cx, cy = W // 2, img_y + (prod_img.height // 2)
         draw.ellipse(
             [cx - circle_radius, cy - circle_radius, cx + circle_radius, cy + circle_radius],
@@ -190,22 +169,33 @@ def create_poster_from_file(json_file_path: str, input_image_path: str, output_p
     else:
         poster_draw = ImageDraw.Draw(poster)
         img_y = 160
-        prod_img = Image.new("RGB", (700, 700)) # Placeholder
+        prod_img = Image.new("RGB", (600, 600)) # Placeholder
 
     # ─── 3. TEXT LAYOUT (USING THE REAL DATA) ───
     poster_draw.text((W // 2, 70), "✦ KALASAKHI MARKETPLACE ✦", font=font_body, fill=ACCENT, anchor="mm")
     poster_draw.line([(200, 110), (W - 200, 110)], fill=(230, 220, 210), width=1)
 
-    current_y = img_y + prod_img.height + 60
-    title = product_data.get("product_name_english", "Handcrafted Asset").upper()
-    poster_draw.text((W // 2, current_y), title, font=font_title, fill=TEXT_MAIN, anchor="mm")
-    current_y += 100
+    current_y = img_y + prod_img.height + 50
 
-    # ─── 4. UI BADGE FOOTER ───
+    # Product title — wrap long names to fit within poster width
+    title = product_data.get("product_name_english", "Handcrafted Asset").upper()
+    max_chars = 30  # Characters per line at 40px font
+    wrapped_title = textwrap.wrap(title, width=max_chars)
+    for line in wrapped_title:
+        poster_draw.text((W // 2, current_y), line, font=font_title, fill=TEXT_MAIN, anchor="mm")
+        current_y += 50
+    current_y += 30
+
+    # ─── 4. PRICE BADGE (BIG & PROMINENT) ───
     price = product_data.get('artisan_claimed_price', 0)
+    price_text = f"₹{price}" if price > 0 else "Contact Artisan"
     
-    poster_draw.rectangle([W//2 - 200, current_y, W//2 + 200, current_y + 80], fill=(245, 240, 230), outline=(230, 220, 210), width=1)
-    poster_draw.text((W//2, current_y + 40), f"PRICE: ₹{price}", font=font_tag, fill=TEXT_MAIN, anchor="mm")
+    badge_w, badge_h = 400, 100
+    badge_x = W // 2 - badge_w // 2
+    badge_y = current_y
+    # Rounded badge background
+    poster_draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=20, fill=(44, 30, 22), outline=(190, 110, 50), width=2)
+    poster_draw.text((W // 2, badge_y + badge_h // 2), price_text, font=font_price, fill=(255, 255, 255), anchor="mm")
 
     poster.save(output_poster_path, "PNG", quality=100)
     print(f"🎉 Premium Poster saved: {output_poster_path}")

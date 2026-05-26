@@ -8,7 +8,7 @@ ip = "0.0.0.0"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "kalamitra-db"
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+database_name = "saki"
+database_id = "5df91c9b-5346-4718-8127-4a736fd7b9fb"
 migrations_dir = "drizzle"
 

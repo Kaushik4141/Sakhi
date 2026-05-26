@@ -52,3 +52,14 @@ export const marketInsights = sqliteTable('market_insights', {
   roadmapKannada: text('roadmap_kannada').notNull(),
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()).notNull(),
 });
+
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  address: text('address'),
+  city: text('city'),
+  state: text('state'),
+  pincode: text('pincode'),
+});

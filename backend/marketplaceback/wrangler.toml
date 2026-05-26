@@ -5,6 +5,6 @@ compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "sakhi-db"
-database_id = "e737edca-0b7e-4bb0-89b2-f5d48b96ac9f"
+database_name = "saki"
+database_id = "5df91c9b-5346-4718-8127-4a736fd7b9fb"
 migrations_dir = "drizzle/migrations"

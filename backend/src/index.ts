@@ -206,6 +206,108 @@ app.post('/analyze-product', async (c) => {
   }
 })
 
+app.post('/auto-finalize', async (c) => {
+  try {
+    const body = await c.req.json()
+    const artisanId = body.artisanId
+    const price = body.price || 500
+    const discount = body.discount || 0
+
+    if (!artisanId) {
+      return c.json({ success: false, error: 'Missing artisanId' }, 400)
+    }
+
+    // Retrieve the pending listing data from Redis
+    let productData = null;
+    let transparentImageUrl = "";
+    const redisUrl = c.env.UPSTASH_REDIS_REST_URL
+    const redisToken = c.env.UPSTASH_REDIS_REST_TOKEN
+    let redisClient: any = null
+    if (redisUrl && redisToken) {
+      redisClient = new Redis({ url: redisUrl, token: redisToken })
+      try {
+        const cached = await redisClient.get(`pending_listing:${artisanId}`);
+        if (cached) {
+          const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+          productData = parsed.productData;
+          transparentImageUrl = parsed.transparentImageUrl;
+        }
+      } catch (e) {
+        console.error("[auto-finalize] Failed to fetch pending listing from Redis", e);
+      }
+    }
+
+    if (!productData || !transparentImageUrl) {
+      return c.json({ success: false, error: 'No cached product data found. Please retake the photo.' }, 404)
+    }
+
+    let parsedProductData: any = productData;
+    parsedProductData.artisan_claimed_price = price
+    if (discount) {
+      parsedProductData.discount = discount
+    }
+
+    console.log(`[HTTP] /auto-finalize: Calling Python /generate-poster with price ${price}`);
+
+    const pythonRes = await fetch('http://127.0.0.1:8000/generate-poster', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_data: parsedProductData,
+        transparent_image_url: transparentImageUrl,
+        cloudinary_cloud_name: c.env.CLOUDINARY_CLOUD_NAME || "",
+        cloudinary_api_key: c.env.CLOUDINARY_API_KEY || "",
+        cloudinary_api_secret: c.env.CLOUDINARY_API_SECRET || ""
+      })
+    });
+
+    if (!pythonRes.ok) {
+      const errText = await pythonRes.text();
+      console.error("[auto-finalize] Python /generate-poster failed:", errText);
+      return c.json({ success: false, error: `Poster generation failed: ${errText}` }, 500);
+    }
+
+    const pythonData: any = await pythonRes.json();
+
+    if (!pythonData.success) {
+      return c.json({ success: false, error: 'Poster generation returned unsuccessful' }, 500);
+    }
+
+    // Save product to DB
+    const dbResult = await insertProduct(
+      c.env.DB,
+      artisanId,
+      parsedProductData.product_name_english,
+      price,
+      10,
+      pythonData.poster_url,
+      parsedProductData.detailed_visual_description,
+      parsedProductData.material,
+      parsedProductData.color,
+      Array.isArray(parsedProductData.seo_keywords) ? parsedProductData.seo_keywords.join(', ') : parsedProductData.seo_keywords
+    );
+
+    // Fetch the artisan's shop slug to build the storefront URL
+    const drizzleDb = getDrizzle(c.env.DB);
+    const artisanResult = await drizzleDb.select({ shopSlug: artisans.shopSlug }).from(artisans).where(eq(artisans.id, artisanId));
+    const shopSlug = artisanResult.length > 0 ? artisanResult[0].shopSlug : 'unknown-shop';
+    const storefrontUrl = `https://kalamitra.in/shop/${shopSlug}`;
+
+    console.log(`[HTTP] /auto-finalize: Poster generated! URL: ${pythonData.poster_url}, Storefront: ${storefrontUrl}`);
+
+    return c.json({
+      success: true,
+      posterUrl: pythonData.poster_url,
+      storefrontUrl,
+      shopSlug,
+      productSaved: dbResult.success,
+    });
+  } catch (err: any) {
+    console.error("[HTTP] /auto-finalize error:", err);
+    return c.json({ success: false, error: err.message }, 500);
+  }
+})
+
 
 app.get('/ws', async (c) => {
   const requestId = crypto.randomUUID()
@@ -298,7 +400,7 @@ app.get('/ws', async (c) => {
       }
       prompt += `Help them manage their business — adding products, updating stock, checking orders, or answering business questions.\n`
       prompt += `CRITICAL: If the artisan wants to ADD a new product to their store, you MUST call the "request_product_photo" tool immediately! Do not ask for details first. Just call the tool so they can take a picture, and say something like "Great, I've opened the camera. Please take a photo of the product."\n\n`
-      prompt += `CRITICAL: When a product photo is uploaded, the system will inject a SYSTEM message with market research analysis. You must read that market research, tell the user the suggested price range, and ask them what price they want to list the product for. Once they agree on a final price, you MUST call the "finalize_product_listing" tool passing the price and the analysis details to officially list the product.\n\n`
+      prompt += `CRITICAL: When a product photo is uploaded, the system will inject a SYSTEM message with market research analysis. You must read that market research, tell the user the suggested price range, and ask them what price they want to list the product for, and if they want to offer a discount. Once they agree on a final price and discount, you MUST call the "finalize_product_listing" tool passing the price, discount, and the analysis details to officially list the product.\n\n`
     }
 
     if (recentMemory && recentMemory.length > 0) {
@@ -347,7 +449,8 @@ app.get('/ws', async (c) => {
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    price: { type: 'NUMBER', description: 'The final agreed price in INR' }
+                    price: { type: 'NUMBER', description: 'The final agreed price in INR' },
+                    discount: { type: 'NUMBER', description: 'The discount percentage offered (e.g., 10 for 10%), default to 0 if none.' }
                   },
                   required: ['price']
                 }
@@ -881,7 +984,7 @@ app.get('/ws', async (c) => {
           if (finalizeProductListingCalls.length > 0) {
             for (const call of finalizeProductListingCalls) {
               const { id, args } = call
-              const { price } = args
+              const { price, discount } = args
 
               // Retrieve the pending listing data from Redis
               let productData = null;
@@ -918,8 +1021,11 @@ app.get('/ws', async (c) => {
 
               let parsedProductData: any = productData;
               parsedProductData.artisan_claimed_price = price
+              if (discount) {
+                parsedProductData.discount = discount
+              }
 
-              console.log(`[WS:${requestId}] Calling Python /generate-poster with final price ${price}`)
+              console.log(`[WS:${requestId}] Calling Python /generate-poster with final price ${price} and discount ${discount}`)
 
               fetch('http://127.0.0.1:8000/generate-poster', {
                 method: 'POST',

@@ -1,7 +1,5 @@
-import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import type { Metadata, ResolvingMetadata } from "next";
-import { getDb, schema } from "@/db";
 import CheckoutButton from "@/components/CheckoutButton";
 
 export const runtime = "edge";
@@ -23,42 +21,53 @@ export async function generateMetadata(
   parent: ResolvingMetadata
 ): Promise<Metadata> {
   const { artisan_slug } = await params;
-  const db = getDb();
   
-  const artisan = await db.query.artisans.findFirst({
-    where: eq(schema.artisans.slug, artisan_slug),
-  });
+  try {
+    const res = await fetch(`http://127.0.0.1:8787/storefront/${artisan_slug}`, { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.artisan) {
+        return {
+          title: `${data.artisan.name} | Authentic Indian Crafts`,
+          description: data.artisan.bio || `Shop authentic handcrafted products directly from ${data.artisan.name}.`,
+          openGraph: {
+            title: `${data.artisan.name} | Sakhi Marketplace`,
+            description: data.artisan.bio || `Shop authentic handcrafted products directly from ${data.artisan.name}.`,
+            type: "website",
+          },
+        };
+      }
+    }
+  } catch (error) {
+    console.error("Failed to fetch artisan for metadata");
+  }
 
-  if (!artisan) return { title: "Artisan Not Found" };
-
-  return {
-    title: `${artisan.name} | Authentic Indian Crafts`,
-    description: artisan.bio || `Shop authentic handcrafted products directly from ${artisan.name}.`,
-    openGraph: {
-      title: `${artisan.name} | Sakhi Marketplace`,
-      description: artisan.bio || `Shop authentic handcrafted products directly from ${artisan.name}.`,
-      type: "website",
-    },
-  };
+  return { title: "Artisan Not Found" };
 }
 
 export default async function StorefrontPage({ params }: StorefrontPageProps) {
   const { artisan_slug } = await params;
-  const db = getDb();
 
   // ── Data Fetching ──────────────────────────────────────────────
-  const artisan = await db.query.artisans.findFirst({
-    where: eq(schema.artisans.slug, artisan_slug),
-  });
+  let artisan = null;
+  let products: any[] = [];
+
+  try {
+    const res = await fetch(`http://127.0.0.1:8787/storefront/${artisan_slug}`, { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.artisan) {
+        artisan = data.artisan;
+        products = data.products || [];
+      }
+    }
+  } catch (error) {
+    console.error("Backend is not running or unreachable.");
+  }
 
   if (!artisan) {
     notFound();
   }
-
-  const products = await db.query.products.findMany({
-    where: eq(schema.products.artisanId, artisan.id),
-    orderBy: (products, { asc }) => [asc(products.name)],
-  });
 
   const jsonLd = {
     "@context": "https://schema.org",

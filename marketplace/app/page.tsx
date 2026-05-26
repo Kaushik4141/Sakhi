@@ -6,18 +6,31 @@ import CategoriesBar from "@/components/CategoriesBar";
 import HeroCarousel from "@/components/HeroCarousel";
 import ProductCard from "@/components/ProductCard";
 
-export default async function Home({ searchParams }: { searchParams: { category?: string } }) {
-  const category = searchParams.category || "All Crafts";
+export default async function Home({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
+  const resolvedSearchParams = await searchParams;
+  const category = resolvedSearchParams.category || "All Crafts";
   let productsWithArtisans = [];
   
   try {
-    const fetchUrl = category !== "All Crafts" 
-      ? `http://127.0.0.1:8787/api/products?category=${encodeURIComponent(category)}`
-      : 'http://127.0.0.1:8787/api/products';
+    const fetchUrl = 'http://127.0.0.1:8787/marketplace';
       
     const res = await fetch(fetchUrl, { cache: 'no-store' });
     if (res.ok) {
-      productsWithArtisans = await res.json();
+      const data = await res.json();
+      if (data.success && data.products) {
+        productsWithArtisans = data.products.map((p: any) => ({
+          product: {
+            id: p.id,
+            name: p.name,
+            price: p.priceInr,
+            imageUrl: p.imageUrl,
+            isGiVerified: false
+          },
+          artisan: {
+            name: p.artisanName
+          }
+        }));
+      }
     }
   } catch (error) {
     console.error("Backend is not running or unreachable.");
