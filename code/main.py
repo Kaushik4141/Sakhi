@@ -32,6 +32,17 @@ class GeneratePosterRequest(BaseModel):
     cloudinary_api_key: str
     cloudinary_api_secret: str
 
+class WorkforceRequest(BaseModel):
+    """Composite goal payload from the Hono voice bridge's `invoke_workforce` tool."""
+    artisan_id: str
+    goal: str                          # "SELL_PRODUCT" | "BUSINESS_SNAPSHOT" | ...
+    product: str = None               # optional convenience fields
+    quantity: int = None
+    manufacturing_cost_inr: float = None
+    discount: float = 0
+    image_base64: str = None           # optional; present when a photo was taken
+    chat_transcript: str = ""
+
 # =====================================================================
 # HELPER: REMOVE BG VIA API
 # =====================================================================
@@ -170,6 +181,63 @@ async def generate_poster_endpoint(req: GeneratePosterRequest):
 
     except Exception as e:
         print(f"❌ Error in /generate-poster: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/run-workforce")
+async def run_workforce_endpoint(req: WorkforceRequest):
+    """Layer 2/3 entry point: hand a spoken goal to the autonomous agent workforce.
+
+    The Hono voice bridge calls this from its `invoke_workforce` tool when the
+    merchant states a composite goal (e.g. "I made 20 soaps, help me sell them").
+    The graph runs to completion and returns the progress trace + artifacts, which
+    the voice bridge feeds back to Gemini Live so it can narrate what happened.
+    """
+    try:
+        # Import here so the endpoint still loads if langgraph isn't installed;
+        # the import error surfaces only when this route is actually exercised.
+        from workforce.graph import workforce_graph, SUPPORTED_GOALS
+        from workforce.state import WorkforceState
+
+        if req.goal.upper() not in SUPPORTED_GOALS:
+            return {"success": False,
+                    "error": f"Unsupported goal '{req.goal}'. Supported: {sorted(SUPPORTED_GOALS)}"}
+
+        initial: WorkforceState = {
+            "artisan_id": req.artisan_id,
+            "goal": req.goal.upper(),
+            "goal_context": {
+                "product": req.product,
+                "quantity": req.quantity,
+                "manufacturing_cost_inr": req.manufacturing_cost_inr,
+                "discount": req.discount,
+                "image_base64": req.image_base64,
+            },
+            "chat_transcript": req.chat_transcript or "",
+            "product": None,
+            "pricing": None,
+            "marketing": None,
+            "snapshot": None,
+            "progress": [],
+            "artifacts": {},
+            "errors": [],
+        }
+
+        print(f"🧠 Running workforce graph for goal={req.goal} artisan={req.artisan_id}")
+        final = await workforce_graph.ainvoke(initial)
+
+        return {
+            "success": len(final.get("errors", [])) == 0,
+            "progress": final.get("progress", []),
+            "artifacts": final.get("artifacts", {}),
+            "errors": final.get("errors", []),
+            "product": final.get("product"),
+            "pricing": final.get("pricing"),
+            "marketing": final.get("marketing"),
+            "snapshot": final.get("snapshot"),
+        }
+    except Exception as e:
+        print(f"❌ Error in /run-workforce: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

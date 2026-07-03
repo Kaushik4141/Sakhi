@@ -5,3 +5,7 @@ requests
 cloudinary
 pillow
 google-genai
+# --- AI Workforce (Layer 2/3 orchestrator) ---
+langgraph
+langchain-google-genai
+aiohttp

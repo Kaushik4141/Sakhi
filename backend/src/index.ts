@@ -404,7 +404,7 @@ app.post('/analyze-product', async (c) => {
     })
 
   } catch (err: any) {
-    console.error("[HTTP] /upload-product error:", err)
+    console.error("[HTTP] /analyze-product error:", err)
     return c.json({ success: false, error: err.message }, 500)
   }
 })
@@ -413,11 +413,11 @@ app.post('/auto-finalize', async (c) => {
   try {
     const body = await c.req.json()
     const artisanId = body.artisanId
-    const price = body.price || 500
+    const price = body.price
     const discount = body.discount || 0
 
-    if (!artisanId) {
-      return c.json({ success: false, error: 'Missing artisanId' }, 400)
+    if (!artisanId || price === undefined) {
+      return c.json({ success: false, error: 'Missing artisanId or price' }, 400)
     }
 
     // Retrieve the pending listing data from Redis
