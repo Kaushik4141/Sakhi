@@ -99,23 +99,29 @@ async def planner(state: WorkforceState) -> dict:
 
 async def product_agent(state: WorkforceState) -> dict:
     ctx = state.get("goal_context", {}) or {}
+    # If /analyze already ran (photo cached in Redis as pending_listing), seed
+    # the brief from that real analysis instead of asking the LLM to invent it.
+    cached = ctx.get("existing_product_data") or {}
     prompt = (
         "You are the Product Agent. Produce an optimized marketplace listing.\n"
         f"Product mentioned: {ctx.get('product', 'unknown')}\n"
         f"Quantity: {ctx.get('quantity', 1)}\n"
+        f"Existing analysis: {json.dumps(cached) if cached else 'none'}\n"
         f"Recent transcript: {state.get('chat_transcript', '')}\n\n"
+        "If existing analysis already provides fields, refine them (better SEO "
+        "keywords, tighter description) rather than discarding them.\n"
         "Return STRICT JSON only with keys: product_name_english, category, "
         "material, color, seo_keywords (array of strings), "
         "detailed_visual_description."
     )
     data = await _llm_json(prompt) or {}
     brief: ProductBrief = {
-        "product_name_english": data.get("product_name_english", ctx.get("product", "Handmade product")),
-        "category": data.get("category", "Handicraft"),
-        "material": data.get("material", "Mixed materials"),
-        "color": data.get("color", "Natural"),
-        "seo_keywords": data.get("seo_keywords", ["handmade", "artisan"]),
-        "detailed_visual_description": data.get("detailed_visual_description", ""),
+        "product_name_english": data.get("product_name_english") or cached.get("product_name_english") or ctx.get("product", "Handmade product"),
+        "category": data.get("category") or cached.get("category") or "Handicraft",
+        "material": data.get("material") or cached.get("material") or "Mixed materials",
+        "color": data.get("color") or cached.get("color") or "Natural",
+        "seo_keywords": data.get("seo_keywords") or cached.get("seo_keywords") or ["handmade", "artisan"],
+        "detailed_visual_description": data.get("detailed_visual_description") or cached.get("detailed_visual_description") or "",
     }
     return {
         "product": brief,
@@ -124,8 +130,23 @@ async def product_agent(state: WorkforceState) -> dict:
 
 
 async def visual_agent(state: WorkforceState) -> dict:
-    """Premium cutout via the existing /analyze service (remove.bg → Cloudinary)."""
+    """Premium cutout via the existing /analyze service (remove.bg → Cloudinary).
+
+    Short-circuits when the artisan already took a photo through the /analyze
+    flow: we trust its cached transparent_image_url and skip a second remove.bg
+    call (saves a paid API hit + a Cloudinary upload per listing)."""
     ctx = state.get("goal_context", {}) or {}
+    cached_url = ctx.get("transparent_image_url")
+    if cached_url:
+        product = dict(state.get("product") or {})
+        product["transparent_image_url"] = cached_url
+        # The cached /analyze also produced richer product fields — merge them.
+        cached = ctx.get("existing_product_data") or {}
+        for k in ("product_name_english", "category", "material", "color", "seo_keywords", "detailed_visual_description"):
+            if cached.get(k) and not product.get(k):
+                product[k] = cached[k]
+        return {"product": product, "progress": ["🖼️ Visual Agent: reused cached premium cutout."]}
+
     image_b64 = ctx.get("image_base64")
     if not image_b64:
         return {"progress": ["🖼️ Visual Agent: no image provided, skipping cutout."]}

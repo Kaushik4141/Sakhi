@@ -710,6 +710,36 @@ app.get('/ws', async (c) => {
                   properties: {},
                   required: []
                 }
+              },
+              {
+                name: 'invoke_workforce',
+                description: 'Delegate a composite business goal to the autonomous AI workforce (Layer 2/3). Use this when the artisan states a multi-step goal like "I made N soaps, help me sell them" — NOT for single actions like updating stock or asking how business is. The workforce runs the Product, Visual, Pricing, Marketing and Publish agents automatically and returns a progress trace you must narrate back to the user.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {
+                    goal: {
+                      type: 'STRING',
+                      description: 'The high-level goal. One of: "SELL_PRODUCT" (she made a product and wants to list+price+market it), "BUSINESS_SNAPSHOT" (she asks how business is going).'
+                    },
+                    product: {
+                      type: 'STRING',
+                      description: 'The product name mentioned by the artisan (e.g. "handmade coconut soap").'
+                    },
+                    quantity: {
+                      type: 'NUMBER',
+                      description: 'How many units she made, if mentioned.'
+                    },
+                    manufacturing_cost_inr: {
+                      type: 'NUMBER',
+                      description: 'Per-unit manufacturing cost in INR if she mentioned it; otherwise the workforce will estimate.'
+                    },
+                    discount: {
+                      type: 'NUMBER',
+                      description: 'Discount percentage to apply, if she asked for one. Default 0.'
+                    }
+                  },
+                  required: ['goal']
+                }
               }
             ]
           }
@@ -1323,6 +1353,115 @@ app.get('/ws', async (c) => {
                       response: {
                         output: {
                           snapshot: toolMessage
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+              geminiWs.send(JSON.stringify(responsePayload))
+            }
+            return // Intercept: do not forward this toolCall to client
+          }
+
+          const invokeWorkforceCalls = functionCalls.filter(call => call.name === 'invoke_workforce')
+          if (invokeWorkforceCalls.length > 0) {
+            for (const call of invokeWorkforceCalls) {
+              const { id, args } = call
+              const goal = (args?.goal || '').toUpperCase()
+
+              // If the artisan already took a product photo (via the /analyze-product
+              // flow), the analysis result + transparent image URL are cached in Redis
+              // under 'pending_listing:<artisanId>'. Prefer that over a fresh upload.
+              let pendingImageBase64: string | null = (globalThis as any).__pendingProductImageBase64 || null
+              let pendingProductData: any = null
+              let pendingTransparentImageUrl: string | null = null
+              if (redisClient && sessionArtisanId) {
+                try {
+                  const cached = await redisClient.get(`pending_listing:${sessionArtisanId}`)
+                  if (cached) {
+                    const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached
+                    pendingProductData = parsed?.productData || null
+                    pendingTransparentImageUrl = parsed?.transparentImageUrl || null
+                  }
+                } catch (e) {
+                  console.error(`[WS:${requestId}] Failed to read pending_listing from Redis`, e)
+                }
+              }
+
+              const workforcePayload: any = {
+                artisanId: sessionArtisanId,
+                goal,
+                product: args?.product || pendingProductData?.product_name_english,
+                quantity: args?.quantity,
+                manufacturing_cost_inr: args?.manufacturing_cost_inr,
+                discount: args?.discount || 0,
+                image_base64: pendingImageBase64,
+                transparent_image_url: pendingTransparentImageUrl,
+                existing_product_data: pendingProductData,
+                chat_transcript: sessionMemory.join('\n'),
+              }
+
+              const pythonBaseUrl = (c.env as any).PYTHON_API_URL || 'http://127.0.0.1:8000'
+              console.log(`[WS:${requestId}] INVOKE_WORKFORCE: delegating goal '${goal}' to ${pythonBaseUrl}/run-workforce`)
+
+              let outcomeText = ''
+              try {
+                const wfRes = await fetch(`${pythonBaseUrl}/run-workforce`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(workforcePayload)
+                })
+                const wfData: any = await wfRes.json()
+                if (!wfData.success && wfData.error) {
+                  throw new Error(wfData.error)
+                }
+
+                // Compose a single narration string the voice agent should read aloud.
+                const progressLines: string[] = Array.isArray(wfData.progress) ? wfData.progress : []
+                const artifacts = wfData.artifacts || {}
+                const pricing = wfData.pricing
+                let narration = progressLines.join(' ')
+                if (pricing?.suggested_price_inr) {
+                  narration += ` Suggested price is ₹${pricing.suggested_price_inr} (${pricing.rationale || `margin ${pricing.margin_percent}%`}).`
+                }
+                if (artifacts.shop_url) {
+                  narration += ` The product is now live at ${artifacts.shop_url}.`
+                }
+                outcomeText = narration || 'The workforce completed your request.'
+
+                // Forward the generated marketing assets + poster to the client so the
+                // mobile app can display them immediately alongside the voice reply.
+                client.send(JSON.stringify({
+                  type: 'workforce_result',
+                  goal,
+                  product: wfData.product,
+                  pricing: wfData.pricing,
+                  marketing: wfData.marketing,
+                  posterUrl: artifacts.poster_url,
+                  shopUrl: artifacts.shop_url,
+                }))
+
+                // Clear the one-shot pending image so a later goal doesn't reuse it.
+                ;(globalThis as any).__pendingProductImageBase64 = null
+
+                sessionMemory.push(`Action: I delegated the '${goal}' goal to the workforce. ${progressLines.join('; ')}`)
+                saveMemory()
+              } catch (wfErr: any) {
+                console.error(`[WS:${requestId}] Workforce failed:`, wfErr)
+                outcomeText = `I tried to run your request through my team but hit an error: ${wfErr.message}. I'll handle it manually instead.`
+              }
+
+              const responsePayload = {
+                toolResponse: {
+                  functionResponses: [
+                    {
+                      id: id,
+                      name: 'invoke_workforce',
+                      response: {
+                        output: {
+                          success: true,
+                          outcome: outcomeText
                         }
                       }
                     }

@@ -41,6 +41,8 @@ class WorkforceRequest(BaseModel):
     manufacturing_cost_inr: float = None
     discount: float = 0
     image_base64: str = None           # optional; present when a photo was taken
+    transparent_image_url: str = None  # if /analyze already ran, reuse its cutout
+    existing_product_data: dict = None # cached analysis result from pending_listing
     chat_transcript: str = ""
 
 # =====================================================================
@@ -212,6 +214,8 @@ async def run_workforce_endpoint(req: WorkforceRequest):
                 "manufacturing_cost_inr": req.manufacturing_cost_inr,
                 "discount": req.discount,
                 "image_base64": req.image_base64,
+                "transparent_image_url": req.transparent_image_url,
+                "existing_product_data": req.existing_product_data,
             },
             "chat_transcript": req.chat_transcript or "",
             "product": None,
